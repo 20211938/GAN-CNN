@@ -14,6 +14,7 @@ from .few_shot_dataset import (
 )
 from .client_data_loader import load_client_data
 from .non_iid_distribution import distribute_non_iid, analyze_client_distribution
+from .logger import FederatedLearningLogger, create_logger
 
 __all__ = [
     'DefectDataset',
@@ -26,6 +27,8 @@ __all__ = [
     'prepare_few_shot_samples',
     'load_client_data',
     'distribute_non_iid',
-    'analyze_client_distribution'
+    'analyze_client_distribution',
+    'FederatedLearningLogger',
+    'create_logger'
 ]
 

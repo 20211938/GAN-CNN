@@ -14,6 +14,8 @@ from models.cnn import create_cnn_model
 from federated.server import FederatedServer
 from federated.client import FederatedClient
 from utils.client_data_loader import load_client_data
+from utils.logger import create_logger
+from pathlib import Path
 
 
 def main():
@@ -125,6 +127,25 @@ def main():
         help='사용할 디바이스 (기본값: 자동 감지)'
     )
     
+    # 로깅 옵션
+    parser.add_argument(
+        '--log-dir',
+        type=Path,
+        default=Path('logs'),
+        help='로그 저장 디렉토리 (기본값: logs)'
+    )
+    parser.add_argument(
+        '--experiment-name',
+        type=str,
+        default=None,
+        help='실험 이름 (기본값: 타임스탬프)'
+    )
+    parser.add_argument(
+        '--no-log',
+        action='store_true',
+        help='로그 저장 비활성화'
+    )
+    
     args = parser.parse_args()
     
     # 최소 클라이언트 수 설정
@@ -148,8 +169,35 @@ def main():
     print(f"  ├─ 배치 크기: {args.batch_size}")
     print(f"  ├─ 백본 모델: {args.backbone}")
     print(f"  ├─ 디바이스: {args.device}")
-    print(f"  └─ 퓨샷 학습: {'사용' if args.use_few_shot else '미사용'}")
+    print(f"  ├─ 퓨샷 학습: {'사용' if args.use_few_shot else '미사용'}")
+    print(f"  └─ 로그 저장: {'비활성화' if args.no_log else f'{args.log_dir}'}")
     print(f"{'='*70}\n")
+    
+    # 로거 초기화
+    logger = None
+    if not args.no_log:
+        logger = create_logger(
+            log_dir=args.log_dir,
+            experiment_name=args.experiment_name
+        )
+        
+        # 실험 설정 기록
+        config = {
+            'data_dir': str(args.data_dir),
+            'num_clients': args.num_clients,
+            'min_clients': args.min_clients,
+            'non_iid_alpha': args.non_iid_alpha,
+            'num_rounds': args.num_rounds,
+            'epochs': args.epochs,
+            'learning_rate': args.learning_rate,
+            'batch_size': args.batch_size,
+            'train_ratio': args.train_ratio,
+            'backbone': args.backbone,
+            'device': args.device,
+            'use_few_shot': args.use_few_shot,
+            'server_port': args.server_port
+        }
+        logger.log_config(config)
     
     # 1. AprilGAN 모델 초기화
     print("[1단계] AprilGAN 모델 초기화 중...")
@@ -170,6 +218,38 @@ def main():
             verbose=True
         )
         num_classes = len(defect_type_to_idx)
+        
+        # 클라이언트별 분포를 로거에 기록
+        if logger is not None:
+            from utils.bbox_utils import extract_bboxes_from_json, normalize_defect_type
+            client_distributions = {}
+            for client_id in range(args.num_clients):
+                # 학습 데이터셋에서 결함 유형 통계 수집
+                defect_counts = {}
+                train_dataset = train_loaders[client_id].dataset
+                val_dataset = val_loaders[client_id].dataset
+                
+                # JSON 파일 경로 추출 (데이터셋이 경로를 저장하는 경우)
+                total_samples = len(train_dataset) + len(val_dataset)
+                
+                # 샘플에서 결함 유형 통계 수집
+                for idx in range(min(100, len(train_dataset))):  # 샘플링
+                    try:
+                        sample = train_dataset[idx]
+                        if 'defect_type' in sample:
+                            dtype = normalize_defect_type(sample['defect_type'])
+                            defect_counts[dtype] = defect_counts.get(dtype, 0) + 1
+                    except:
+                        pass
+                
+                client_distributions[client_id] = {
+                    'total_samples': total_samples,
+                    'train_samples': len(train_dataset),
+                    'val_samples': len(val_dataset),
+                    'defect_distribution': defect_counts
+                }
+            
+            logger.log_client_distribution(client_distributions)
     except Exception as e:
         print(f"  ❌ 데이터 로드 실패: {e}")
         print("  💡 데이터 디렉토리를 확인하거나 --data-dir 옵션을 확인하세요.")
@@ -236,6 +316,8 @@ def main():
         
         # 6-2. 각 클라이언트가 로컬 데이터로 학습
         print(f"\n[라운드 {round_num + 1}] 2단계: 로컬 학습")
+        client_stats_list = []
+        
         for client in clients:
             client_train_loader = train_loaders[client.client_id]
             
@@ -254,6 +336,16 @@ def main():
                     epochs=args.epochs,
                     learning_rate=args.learning_rate
                 )
+            
+            # 클라이언트 통계 저장
+            client_stat = {
+                'client_id': client.client_id,
+                'loss': stats.get('loss', 0.0),
+                'accuracy': stats.get('accuracy', 0.0),
+                'samples': stats.get('samples', 0),
+                'data_size': len(train_loaders[client.client_id].dataset)
+            }
+            client_stats_list.append(client_stat)
         
         # 6-3. 각 클라이언트가 가중치를 서버로 전송
         print(f"\n[라운드 {round_num + 1}] 3단계: 가중치 업로드")
@@ -266,10 +358,25 @@ def main():
         time.sleep(1)  # 서버 처리 대기
         
         aggregated_weights = server.get_aggregated_weights()
+        server_stats = None
         if aggregated_weights is not None:
             print(f"  ✅ 가중치 집계 완료 (라운드 {server.current_round})")
+            server_stats = {
+                'round': server.current_round,
+                'aggregated': True,
+                'num_clients': len(client_stats_list)
+            }
         else:
             print(f"  ⚠️  아직 집계되지 않음")
+            server_stats = {
+                'round': round_num,
+                'aggregated': False,
+                'num_clients': len(client_stats_list)
+            }
+        
+        # 라운드 로그 기록
+        if logger is not None:
+            logger.log_round(round_num + 1, client_stats_list, server_stats)
         
         print(f"\n라운드 {round_num + 1} 완료!")
         print(f"{'='*70}\n")
@@ -314,11 +421,52 @@ def main():
         
         overall_accuracy = total_correct / total_samples if total_samples > 0 else 0.0
         print(f"\n  전체 모델 정확도: {overall_accuracy:.4f} ({total_correct}/{total_samples})")
+        
+        # 최종 결과를 로거에 기록
+        if logger is not None:
+            final_results = {
+                'overall_accuracy': overall_accuracy,
+                'total_correct': total_correct,
+                'total_samples': total_samples,
+                'client_results': {}
+            }
+            
+            # 클라이언트별 결과 추가
+            for client_id, val_loader in enumerate(val_loaders):
+                client_correct = 0
+                client_samples = 0
+                
+                with torch.no_grad():
+                    for batch in val_loader:
+                        images = batch['image'].to(args.device)
+                        labels = batch['label'].to(args.device)
+                        
+                        outputs = cnn_model(images)
+                        _, predicted = torch.max(outputs, 1)
+                        
+                        batch_size = labels.size(0)
+                        client_samples += batch_size
+                        client_correct += (predicted == labels).sum().item()
+                
+                client_accuracy = client_correct / client_samples if client_samples > 0 else 0.0
+                final_results['client_results'][client_id] = {
+                    'accuracy': client_accuracy,
+                    'correct': client_correct,
+                    'total': client_samples
+                }
+            
+            logger.log_final_results(final_results)
+            logger.save()
     else:
         print("  ⚠️  최종 가중치를 가져올 수 없습니다")
+        if logger is not None:
+            logger.log_final_results({'error': '최종 가중치를 가져올 수 없음'})
+            logger.save()
     
     print(f"\n{'='*70}")
     print(f"연합학습 완료!")
+    if logger is not None:
+        print(f"로그 저장 위치: {logger.get_log_path()}")
     print(f"{'='*70}\n")
     
     # 서버 종료
