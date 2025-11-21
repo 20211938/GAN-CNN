@@ -9,9 +9,19 @@ from collections import Counter, defaultdict
 from typing import Dict, List, Set
 import sys
 
+# 결함 유형 정규화 함수 import
+try:
+    # 프로젝트 루트에서 실행하는 경우
+    from utils.bbox_utils import normalize_defect_type
+except ImportError:
+    # 모듈로 실행하는 경우
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent.parent))
+    from utils.bbox_utils import normalize_defect_type
+
 
 def extract_defect_types_from_metadata(metadata: dict) -> List[str]:
-    """JSON 메타데이터에서 결함 유형 추출"""
+    """JSON 메타데이터에서 결함 유형 추출 (정규화 적용)"""
     defect_types = []
     
     # TagBoxes에서 결함 정보 추출
@@ -22,6 +32,8 @@ def extract_defect_types_from_metadata(metadata: dict) -> List[str]:
             comment = tag.get('Comment', '').strip()
             if name:
                 defect_type = comment if comment else name
+                # 결함 유형 정규화 (공백 제거, 오타 수정)
+                defect_type = normalize_defect_type(defect_type)
                 if defect_type and defect_type not in defect_types:
                     defect_types.append(defect_type)
     
@@ -32,6 +44,8 @@ def extract_defect_types_from_metadata(metadata: dict) -> List[str]:
             comment = tag.get('Comment', '').strip()
             if name:
                 defect_type = comment if comment else name
+                # 결함 유형 정규화 (공백 제거, 오타 수정)
+                defect_type = normalize_defect_type(defect_type)
                 if defect_type and defect_type not in defect_types:
                     defect_types.append(defect_type)
     
