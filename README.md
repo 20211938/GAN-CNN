@@ -32,24 +32,6 @@ AprilGAN → 합성 데이터 생성/결함 탐지 → CNN → 결함 클래스 
 - 금속 3D 프린팅 공정 결함 이미지
 - 결함 유형별 샘플 불균형 문제 해결을 위한 AprilGAN 기반 증강
 
-## 🚀 시작하기
-
-### 요구사항
-
-```bash
-# 설치 명령어 (예시)
-pip install -r requirements.txt
-```
-
-### 사용법
-
-```bash
-# 훈련 실행 (예시)
-python train.py
-
-# 추론 실행 (예시)
-python inference.py
-```
 
 ## 📈 기대 효과
 
@@ -65,4 +47,3 @@ python inference.py
 ---
 
 **Last Updated**: 2024
-
