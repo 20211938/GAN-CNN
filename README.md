@@ -66,28 +66,53 @@ python train_federated.py --help
 
 1. **CUDA Toolkit 12.8 설치** (필수)
    - [NVIDIA CUDA Toolkit 다운로드](https://developer.nvidia.com/cuda-downloads)
+   - Local(exe)로 설치
    - 필수 버전: CUDA 12.8
 
 2. **가상 환경 생성 및 활성화**
    ```powershell
+   # 가상 환경 생성
    python -m venv venv
+   
+   # 가상 환경 활성화 (PowerShell)
    .\venv\Scripts\Activate.ps1
    ```
 
-3. **패키지 설치**
+3. **기본 패키지 설치**
    ```powershell
-   pip install -r requirements.txt
+   # pip 업그레이드
+   python -m pip install --upgrade pip
+   
+   # 기본 패키지 설치 (OpenCV, NumPy 등)
+   pip install opencv-python numpy pandas pillow matplotlib seaborn scikit-learn scikit-image tqdm flask requests
    ```
 
-4. **PyTorch CUDA 12.8 버전 설치**
+4. **PyTorch CUDA 12.8 버전 설치** (중요!)
    ```powershell
    # CUDA 12.8 직접 지원 버전
    pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
    ```
 
-5. **환경 변수 설정**
+5. **나머지 패키지 설치**
+   ```powershell
+   # 데이터베이스 및 기타 패키지
+   pip install pymongo python-dotenv jupyter ipykernel
+   ```
+
+6. **설치 확인**
+   ```powershell
+   # Python에서 확인
+   python -c "import cv2; import torch; print('OpenCV:', cv2.__version__); print('PyTorch:', torch.__version__); print('CUDA available:', torch.cuda.is_available())"
+   ```
+
+7. **환경 변수 설정**
    - 프로젝트 루트에 `.env` 파일 생성
    - MongoDB 연결 정보 입력 (자세한 내용은 [INSTALLATION.md](INSTALLATION.md) 참고)
+
+**⚠️ 중요: 가상 환경이 활성화되어 있는지 확인하세요!**
+- PowerShell 프롬프트 앞에 `(venv)`가 표시되어야 합니다
+- 가상 환경이 활성화되지 않으면 패키지가 시스템 Python에 설치될 수 있습니다
+- `cv2` 모듈 오류가 발생하면 가상 환경이 활성화되었는지 확인하세요
 
 ## 🎯 프로젝트 목표
 
