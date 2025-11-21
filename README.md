@@ -4,6 +4,46 @@
 
 금속 3D 프린팅 공정 중 발생하는 결함을 **AprilGAN + CNN** 구조를 활용하여 검출하고 분류하는 프로젝트입니다.
 
+## 🚀 시작하기
+
+### 필수 요구사항
+
+- **Python**: 3.8 이상 (권장: 3.9 이상)
+- **pip**: Python 패키지 관리자
+- **NVIDIA GPU**: CUDA를 지원하는 NVIDIA GPU
+- **CUDA Toolkit**: GPU 가속을 위한 CUDA Toolkit (필수: CUDA 12.8)
+
+### 설치 방법
+
+자세한 설치 가이드는 [INSTALLATION.md](INSTALLATION.md)를 참고하세요.
+
+1. **CUDA Toolkit 12.8 설치** (필수)
+   - [NVIDIA CUDA Toolkit 다운로드](https://developer.nvidia.com/cuda-downloads)
+   - 필수 버전: CUDA 12.8
+
+2. **가상 환경 생성 및 활성화**
+   ```powershell
+   python -m venv venv
+   .\venv\Scripts\Activate.ps1
+   ```
+
+3. **패키지 설치**
+   ```powershell
+   pip install -r requirements.txt
+   ```
+
+4. **PyTorch CUDA 12.8 버전 설치**
+   ```powershell
+   # CUDA 12.8 직접 지원 버전
+   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+   ```
+
+5. **환경 변수 설정**
+   - 프로젝트 루트에 `.env` 파일 생성
+   - MongoDB 연결 정보 입력 (자세한 내용은 [INSTALLATION.md](INSTALLATION.md) 참고)
+
+자세한 설치 가이드는 [INSTALLATION.md](INSTALLATION.md)를 참고하세요.
+
 ## 🎯 목표
 
 - **결함 검출**: AprilGAN을 통한 합성 데이터 생성 및 결함 탐지
@@ -61,4 +101,13 @@ AprilGAN → 합성 데이터 생성/결함 탐지 → CNN → 결함 클래스 
 
 ---
 
-**Last Updated**: 2024
+---
+
+## 📚 문서
+
+- [설치 가이드](INSTALLATION.md) - 환경 설정 및 패키지 설치 방법
+- [요구사항](requirements.txt) - 필수 패키지 목록
+
+---
+
+**Last Updated**: 2025년

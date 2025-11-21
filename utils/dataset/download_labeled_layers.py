@@ -56,7 +56,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("data") / "labeled_layers",
+        default=Path("data"),
         help="Directory to save downloaded layers.",
     )
     parser.add_argument(
@@ -87,7 +87,14 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--metadata",
         action="store_true",
-        help="Persist document metadata alongside each downloaded image.",
+        default=True,
+        help="Persist document metadata alongside each downloaded image (default: True).",
+    )
+    parser.add_argument(
+        "--no-metadata",
+        dest="metadata",
+        action="store_false",
+        help="Do not save metadata JSON files.",
     )
     parser.add_argument(
         "--dry-run",
@@ -133,7 +140,24 @@ def resolve_databases(client: MongoClient, args: argparse.Namespace) -> List[str
         pattern = re.compile(args.match)
         db_names = [name for name in db_names if pattern.search(name)]
 
-    return sorted(db_names)
+    # 날짜 형식의 데이터베이스 이름을 연도 기준으로 내림차순 정렬 (2025, 2024, ...)
+    def extract_year(db_name: str) -> int:
+        """데이터베이스 이름에서 연도를 추출. 연도가 없으면 0 반환"""
+        import re
+        # 문자열이 숫자로 시작하는 경우 처음 4자리를 연도로 간주 (예: 20210914 -> 2021)
+        if db_name and db_name[0].isdigit():
+            # 처음 4자리가 20xx 형식인지 확인
+            if len(db_name) >= 4 and db_name[:2] == '20' and db_name[2:4].isdigit():
+                return int(db_name[:4])
+        
+        # 다른 위치에서 연도 패턴 찾기 (예: 2025, 2024)
+        match = re.search(r'(20\d{2})', db_name)
+        if match:
+            return int(match.group(1))
+        return 0
+    
+    # 연도 기준으로 내림차순 정렬 (최신 연도 먼저: 2025, 2024, 2023, ...)
+    return sorted(db_names, key=extract_year, reverse=True)
 
 
 def ensure_collections(db, db_name: str) -> Optional[gridfs.GridFS]:
@@ -261,7 +285,7 @@ def download_for_db(
         layer_idx = doc.get("LayerIdx")
         extension = doc.get("Extension", "jpg").lstrip(".")
         filename = doc_to_filename(db_name, layer_num, doc.get("_id"), extension)
-        target_path = output_dir / db_name / filename
+        target_path = output_dir / filename
 
         if dry_run:
             print(f"[DRY-RUN] Would download {db_name}:{layer_num} -> {target_path}")

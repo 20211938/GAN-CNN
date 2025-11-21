@@ -54,13 +54,12 @@ htmlcov/
 .dmypy.json
 dmypy.json
 
-# 데이터 및 모델 파일 (필요시 주석 해제)
-# data/
-# models/
-# *.pth
-# *.ckpt
-# *.h5
+# 데이터 및 모델 파일
+data/
+models/
+*.pth
+*.ckpt
+*.h5
 
 # 로그 파일
 *.log
-
