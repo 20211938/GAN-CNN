@@ -5,6 +5,9 @@
 
 import json
 import time
+import base64
+import pickle
+import gzip
 from typing import Dict, List, Optional
 from flask import Flask, request, jsonify
 import torch
@@ -63,12 +66,23 @@ class FederatedServer:
             if self.aggregated_weights is None:
                 return jsonify({'error': '가중치가 아직 없습니다'}), 404
             
-            # 가중치를 JSON 직렬화 가능한 형태로 변환
-            weights_serialized = self._serialize_weights(self.aggregated_weights)
-            return jsonify({
-                'round': self.current_round,
-                'weights': weights_serialized
-            })
+            try:
+                # 가중치를 바이너리로 압축하여 전송 (JSON보다 훨씬 빠름)
+                weights_serialized = self._serialize_weights_binary(self.aggregated_weights)
+                return jsonify({
+                    'round': self.current_round,
+                    'weights': weights_serialized,
+                    'format': 'binary_compressed'  # 형식 표시
+                })
+            except Exception as e:
+                print(f"[서버] ❌ 가중치 직렬화 오류: {e}")
+                # 폴백: 기존 방식 사용
+                weights_serialized = self._serialize_weights(self.aggregated_weights)
+                return jsonify({
+                    'round': self.current_round,
+                    'weights': weights_serialized,
+                    'format': 'json'  # 형식 표시
+                })
         
         @self.app.route('/upload_weights', methods=['POST'])
         def upload_weights():
@@ -123,8 +137,28 @@ class FederatedServer:
                 self.aggregated_weights = None
             return jsonify({'status': 'reset'})
     
+    def _serialize_weights_binary(self, weights: Dict) -> str:
+        """
+        가중치를 바이너리로 압축하여 Base64 인코딩
+        JSON보다 훨씬 빠르고 작음
+        """
+        # CPU로 이동하고 numpy로 변환
+        weights_cpu = {k: v.cpu() if isinstance(v, torch.Tensor) else v for k, v in weights.items()}
+        
+        # Pickle로 직렬화 후 gzip 압축
+        pickled = pickle.dumps(weights_cpu)
+        compressed = gzip.compress(pickled, compresslevel=6)
+        
+        # Base64 인코딩
+        encoded = base64.b64encode(compressed).decode('utf-8')
+        
+        return encoded
+    
     def _serialize_weights(self, weights: Dict) -> Dict:
-        """가중치를 JSON 직렬화 가능한 형태로 변환"""
+        """
+        가중치를 JSON 직렬화 가능한 형태로 변환 (폴백용)
+        큰 모델의 경우 매우 느림
+        """
         serialized = {}
         for key, value in weights.items():
             # 텐서를 리스트로 변환
@@ -138,8 +172,27 @@ class FederatedServer:
                 serialized[key] = value
         return serialized
     
-    def _deserialize_weights(self, weights: Dict) -> Dict:
-        """JSON에서 가중치 역직렬화"""
+    def _deserialize_weights(self, weights) -> Dict:
+        """
+        가중치 역직렬화
+        바이너리 압축 형식 또는 JSON 형식 모두 지원
+        """
+        # 바이너리 압축 형식인 경우
+        if isinstance(weights, str) and len(weights) > 1000:
+            try:
+                # Base64 디코딩
+                decoded = base64.b64decode(weights.encode('utf-8'))
+                # 압축 해제
+                decompressed = gzip.decompress(decoded)
+                # Pickle 역직렬화
+                deserialized = pickle.loads(decompressed)
+                # 텐서로 변환
+                return {k: torch.tensor(v) if isinstance(v, (list, tuple)) else v 
+                        for k, v in deserialized.items()}
+            except Exception as e:
+                print(f"[서버] ⚠️  바이너리 역직렬화 실패, JSON 형식으로 시도: {e}")
+        
+        # JSON 형식 (기존 방식)
         deserialized = {}
         for key, value in weights.items():
             if isinstance(value, dict) and 'data' in value:

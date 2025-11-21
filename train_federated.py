@@ -176,28 +176,35 @@ def main():
     # 로거 초기화
     logger = None
     if not args.no_log:
-        logger = create_logger(
-            log_dir=args.log_dir,
-            experiment_name=args.experiment_name
-        )
-        
-        # 실험 설정 기록
-        config = {
-            'data_dir': str(args.data_dir),
-            'num_clients': args.num_clients,
-            'min_clients': args.min_clients,
-            'non_iid_alpha': args.non_iid_alpha,
-            'num_rounds': args.num_rounds,
-            'epochs': args.epochs,
-            'learning_rate': args.learning_rate,
-            'batch_size': args.batch_size,
-            'train_ratio': args.train_ratio,
-            'backbone': args.backbone,
-            'device': args.device,
-            'use_few_shot': args.use_few_shot,
-            'server_port': args.server_port
-        }
-        logger.log_config(config)
+        try:
+            logger = create_logger(
+                log_dir=args.log_dir,
+                experiment_name=args.experiment_name
+            )
+            
+            # 실험 설정 기록
+            config = {
+                'data_dir': str(args.data_dir),
+                'num_clients': args.num_clients,
+                'min_clients': args.min_clients,
+                'non_iid_alpha': args.non_iid_alpha,
+                'num_rounds': args.num_rounds,
+                'epochs': args.epochs,
+                'learning_rate': args.learning_rate,
+                'batch_size': args.batch_size,
+                'train_ratio': args.train_ratio,
+                'backbone': args.backbone,
+                'device': args.device,
+                'use_few_shot': args.use_few_shot,
+                'server_port': args.server_port
+            }
+            logger.log_config(config)
+        except Exception as e:
+            print(f"  ⚠️  로거 초기화 실패: {e}")
+            print("  💡 로그 없이 계속 진행합니다.")
+            import traceback
+            traceback.print_exc()
+            logger = None
     
     # 1. AprilGAN 모델 초기화
     print("[1단계] AprilGAN 모델 초기화 중...")
@@ -221,35 +228,34 @@ def main():
         
         # 클라이언트별 분포를 로거에 기록
         if logger is not None:
-            from utils.bbox_utils import extract_bboxes_from_json, normalize_defect_type
-            client_distributions = {}
-            for client_id in range(args.num_clients):
-                # 학습 데이터셋에서 결함 유형 통계 수집
-                defect_counts = {}
-                train_dataset = train_loaders[client_id].dataset
-                val_dataset = val_loaders[client_id].dataset
+            try:
+                from utils.bbox_utils import extract_bboxes_from_json, normalize_defect_type
+                client_distributions = {}
                 
-                # JSON 파일 경로 추출 (데이터셋이 경로를 저장하는 경우)
-                total_samples = len(train_dataset) + len(val_dataset)
+                # load_client_data에서 반환된 client_data를 사용할 수 없으므로
+                # 데이터셋에서 직접 샘플 수만 기록
+                for client_id in range(args.num_clients):
+                    train_dataset = train_loaders[client_id].dataset
+                    val_dataset = val_loaders[client_id].dataset
+                    
+                    total_samples = len(train_dataset) + len(val_dataset)
+                    train_samples = len(train_dataset)
+                    val_samples = len(val_dataset)
+                    
+                    # 결함 유형 통계는 간단하게 샘플 수만 기록
+                    # (정확한 분포는 이미 analyze_client_distribution에서 출력됨)
+                    client_distributions[client_id] = {
+                        'total_samples': total_samples,
+                        'train_samples': train_samples,
+                        'val_samples': val_samples,
+                        'defect_distribution': {}  # 나중에 필요시 추가 가능
+                    }
                 
-                # 샘플에서 결함 유형 통계 수집
-                for idx in range(min(100, len(train_dataset))):  # 샘플링
-                    try:
-                        sample = train_dataset[idx]
-                        if 'defect_type' in sample:
-                            dtype = normalize_defect_type(sample['defect_type'])
-                            defect_counts[dtype] = defect_counts.get(dtype, 0) + 1
-                    except:
-                        pass
-                
-                client_distributions[client_id] = {
-                    'total_samples': total_samples,
-                    'train_samples': len(train_dataset),
-                    'val_samples': len(val_dataset),
-                    'defect_distribution': defect_counts
-                }
-            
-            logger.log_client_distribution(client_distributions)
+                logger.log_client_distribution(client_distributions)
+            except Exception as e:
+                print(f"  ⚠️  클라이언트 분포 로깅 실패: {e}")
+                import traceback
+                traceback.print_exc()
     except Exception as e:
         print(f"  ❌ 데이터 로드 실패: {e}")
         print("  💡 데이터 디렉토리를 확인하거나 --data-dir 옵션을 확인하세요.")

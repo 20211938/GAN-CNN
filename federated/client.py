@@ -6,6 +6,7 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import numpy as np
 from torch.utils.data import DataLoader
 from typing import Dict, Optional
 import requests
@@ -378,11 +379,13 @@ class FederatedClient:
         """
         print(f"[클라이언트 {self.client_id}] 서버에서 가중치 요청 중...")
         try:
-            response = requests.get(f'{self.server_url}/get_weights', timeout=10)
+            # 타임아웃을 60초로 증가 (큰 가중치 전송 시간 고려)
+            response = requests.get(f'{self.server_url}/get_weights', timeout=60)
             
             if response.status_code == 200:
                 data = response.json()
                 server_round = data.get('round', 0)
+                weight_format = data.get('format', 'json')
                 
                 # 라운드 확인
                 if server_round < round_num:
@@ -390,22 +393,30 @@ class FederatedClient:
                     return False
                 
                 # 가중치 역직렬화 및 로드
-                weights = self._deserialize_weights(data['weights'])
+                weights = self._deserialize_weights(data['weights'], format=weight_format)
                 self.model.load_state_dict(weights)
                 
                 print(f"[클라이언트 {self.client_id}] ✅ 집계된 가중치 수신 완료!")
-                print(f"  └─ 서버 라운드: {server_round}")
+                print(f"  ├─ 서버 라운드: {server_round}")
+                print(f"  └─ 전송 형식: {weight_format}")
                 return True
             else:
                 print(f"[클라이언트 {self.client_id}] ❌ 가중치 가져오기 실패: {response.status_code}")
                 return False
         
+        except requests.exceptions.Timeout:
+            print(f"[클라이언트 {self.client_id}] ❌ 가중치 가져오기 타임아웃 (60초 초과)")
+            print(f"  💡 서버가 응답하는 데 시간이 오래 걸립니다. 네트워크 상태를 확인하세요.")
+            return False
         except Exception as e:
             print(f"[클라이언트 {self.client_id}] ❌ 가중치 가져오기 오류: {e}")
             return False
     
     def _serialize_weights(self, weights: Dict) -> Dict:
-        """가중치를 JSON 직렬화 가능한 형태로 변환"""
+        """
+        가중치를 JSON 직렬화 가능한 형태로 변환
+        큰 모델의 경우 매우 느리므로 바이너리 압축 방식 권장
+        """
         serialized = {}
         for key, value in weights.items():
             if isinstance(value, torch.Tensor):
@@ -418,8 +429,38 @@ class FederatedClient:
                 serialized[key] = value
         return serialized
     
-    def _deserialize_weights(self, weights: Dict) -> Dict:
-        """JSON에서 가중치 역직렬화"""
+    def _deserialize_weights(self, weights, format: str = 'json') -> Dict:
+        """
+        가중치 역직렬화
+        바이너리 압축 형식 또는 JSON 형식 모두 지원
+        """
+        import base64
+        import pickle
+        import gzip
+        
+        # 바이너리 압축 형식인 경우
+        if format == 'binary_compressed' or (isinstance(weights, str) and len(weights) > 1000):
+            try:
+                # Base64 디코딩
+                decoded = base64.b64decode(weights.encode('utf-8'))
+                # 압축 해제
+                decompressed = gzip.decompress(decoded)
+                # Pickle 역직렬화
+                deserialized = pickle.loads(decompressed)
+                # 텐서로 변환 (이미 텐서인 경우 그대로 사용)
+                result = {}
+                for k, v in deserialized.items():
+                    if isinstance(v, torch.Tensor):
+                        result[k] = v
+                    elif isinstance(v, (list, tuple, np.ndarray)):
+                        result[k] = torch.tensor(v)
+                    else:
+                        result[k] = v
+                return result
+            except Exception as e:
+                print(f"[클라이언트 {self.client_id}] ⚠️  바이너리 역직렬화 실패, JSON 형식으로 시도: {e}")
+        
+        # JSON 형식 (기존 방식)
         deserialized = {}
         for key, value in weights.items():
             if isinstance(value, dict) and 'data' in value:
