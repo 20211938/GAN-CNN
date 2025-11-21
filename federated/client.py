@@ -11,8 +11,10 @@ from typing import Dict, Optional
 import requests
 import time
 import copy
+from tqdm import tqdm
 
 from models.cnn import DefectClassifierCNN
+from models.few_shot_cnn import HybridCNN
 
 
 class FederatedClient:
@@ -86,21 +88,39 @@ class FederatedClient:
         self,
         train_loader: DataLoader,
         epochs: int = 1,
-        learning_rate: float = 0.001
+        learning_rate: float = 0.001,
+        use_few_shot: bool = False,
+        few_shot_loader: Optional[DataLoader] = None
     ) -> Dict:
         """
         로컬 데이터로 모델 학습
         
         Args:
-            train_loader: 학습 데이터 로더
+            train_loader: 학습 데이터 로더 (일반 학습용)
             epochs: 에폭 수
             learning_rate: 학습률
+            use_few_shot: 퓨샷 학습 모드 사용 여부
+            few_shot_loader: 퓨샷 학습용 데이터 로더
             
         Returns:
             학습 통계 딕셔너리
         """
         if self.model is None:
             raise ValueError("모델이 초기화되지 않았습니다")
+        
+        # 퓨샷 학습 모드
+        if use_few_shot and few_shot_loader is not None:
+            return self._train_few_shot(few_shot_loader, epochs)
+        
+        # 일반 학습 모드
+        print(f"\n{'='*70}")
+        print(f"[클라이언트 {self.client_id}] 일반 학습 모드 시작")
+        print(f"{'='*70}")
+        print(f"  - 총 에폭: {epochs}")
+        print(f"  - 학습률: {learning_rate}")
+        print(f"  - 배치 수: {len(train_loader)}")
+        print(f"  - 디바이스: {self.device}")
+        print(f"{'='*70}\n")
         
         self.model.train()
         self.optimizer = optim.Adam(self.model.parameters(), lr=learning_rate)
@@ -112,8 +132,17 @@ class FederatedClient:
         for epoch in range(epochs):
             epoch_loss = 0.0
             epoch_samples = 0
+            epoch_correct = 0
             
-            for batch in train_loader:
+            # 진행 바 생성
+            pbar = tqdm(
+                train_loader,
+                desc=f"[클라이언트 {self.client_id}] Epoch {epoch+1}/{epochs}",
+                unit="batch",
+                ncols=100
+            )
+            
+            for batch_idx, batch in enumerate(pbar):
                 images = batch['image'].to(self.device)
                 labels = batch['label'].to(self.device)
                 
@@ -127,27 +156,154 @@ class FederatedClient:
                 self.optimizer.step()
                 
                 # 통계
-                epoch_loss += loss.item() * images.size(0)
-                epoch_samples += images.size(0)
+                batch_size = images.size(0)
+                epoch_loss += loss.item() * batch_size
+                epoch_samples += batch_size
                 
                 # 정확도 계산
                 _, predicted = torch.max(outputs.data, 1)
-                correct += (predicted == labels).sum().item()
+                batch_correct = (predicted == labels).sum().item()
+                epoch_correct += batch_correct
+                correct += batch_correct
+                
+                # 진행 바 업데이트
+                current_loss = epoch_loss / epoch_samples if epoch_samples > 0 else 0.0
+                current_acc = epoch_correct / epoch_samples if epoch_samples > 0 else 0.0
+                pbar.set_postfix({
+                    'Loss': f'{current_loss:.4f}',
+                    'Acc': f'{current_acc:.4f}',
+                    'Batch': f'{batch_idx+1}/{len(train_loader)}'
+                })
+            
+            pbar.close()
             
             total_loss += epoch_loss
             total_samples += epoch_samples
             
-            avg_loss = epoch_loss / epoch_samples
+            avg_loss = epoch_loss / epoch_samples if epoch_samples > 0 else 0.0
             accuracy = correct / total_samples if total_samples > 0 else 0.0
             
-            print(f"[클라이언트 {self.client_id}] Epoch {epoch+1}/{epochs} - "
-                  f"Loss: {avg_loss:.4f}, Accuracy: {accuracy:.4f}")
+            print(f"\n[클라이언트 {self.client_id}] Epoch {epoch+1}/{epochs} 완료")
+            print(f"  ├─ 평균 손실: {avg_loss:.6f}")
+            print(f"  ├─ 정확도: {accuracy:.4f} ({correct}/{total_samples})")
+            print(f"  └─ 처리 샘플 수: {epoch_samples}개\n")
         
-        return {
+        final_stats = {
             'loss': total_loss / total_samples if total_samples > 0 else 0.0,
             'accuracy': accuracy,
             'samples': total_samples
         }
+        
+        print(f"[클라이언트 {self.client_id}] 학습 완료!")
+        print(f"  ├─ 최종 손실: {final_stats['loss']:.6f}")
+        print(f"  ├─ 최종 정확도: {final_stats['accuracy']:.4f}")
+        print(f"  └─ 총 샘플 수: {final_stats['samples']}개\n")
+        
+        return final_stats
+    
+    def _train_few_shot(
+        self,
+        few_shot_loader: DataLoader,
+        epochs: int = 1
+    ) -> Dict:
+        """
+        퓨샷 학습 수행
+        
+        Args:
+            few_shot_loader: 퓨샷 학습용 데이터 로더
+            epochs: 에피소드 수
+            
+        Returns:
+            학습 통계 딕셔너리
+        """
+        # HybridCNN 모델인지 확인
+        if not hasattr(self.model, 'few_shot_episode'):
+            raise ValueError("모델이 퓨샷 학습을 지원하지 않습니다. HybridCNN을 사용하세요.")
+        
+        print(f"\n{'='*70}")
+        print(f"[클라이언트 {self.client_id}] 퓨샷 학습 모드 시작")
+        print(f"{'='*70}")
+        print(f"  - 총 에폭: {epochs}")
+        print(f"  - 에피소드 수: {len(few_shot_loader)}")
+        print(f"  - 디바이스: {self.device}")
+        print(f"{'='*70}\n")
+        
+        total_accuracy = 0.0
+        total_episodes = 0
+        total_correct = 0
+        total_query_samples = 0
+        
+        for epoch in range(epochs):
+            epoch_accuracy = 0.0
+            epoch_episodes = 0
+            epoch_correct = 0
+            epoch_query_samples = 0
+            
+            # 진행 바 생성
+            pbar = tqdm(
+                few_shot_loader,
+                desc=f"[클라이언트 {self.client_id}] Few-shot Epoch {epoch+1}/{epochs}",
+                unit="episode",
+                ncols=100
+            )
+            
+            for episode_idx, batch in enumerate(pbar):
+                support_images = batch['support_images'][0].to(self.device)
+                support_labels = batch['support_labels'][0].to(self.device)
+                query_images = batch['query_images'][0].to(self.device)
+                query_labels = batch['query_labels'][0].to(self.device)
+                
+                # 퓨샷 학습 에피소드 수행
+                result = self.model.few_shot_episode(
+                    support_images=support_images,
+                    support_labels=support_labels,
+                    query_images=query_images,
+                    query_labels=query_labels
+                )
+                
+                accuracy = result['accuracy'].item()
+                episode_correct = result.get('correct', 0)
+                episode_total = result.get('total', len(query_labels))
+                
+                epoch_accuracy += accuracy
+                epoch_episodes += 1
+                epoch_correct += episode_correct
+                epoch_query_samples += episode_total
+                
+                # 진행 바 업데이트
+                current_acc = epoch_accuracy / epoch_episodes if epoch_episodes > 0 else 0.0
+                pbar.set_postfix({
+                    'Acc': f'{current_acc:.4f}',
+                    'Ep': f'{episode_idx+1}/{len(few_shot_loader)}'
+                })
+            
+            pbar.close()
+            
+            avg_accuracy = epoch_accuracy / epoch_episodes if epoch_episodes > 0 else 0.0
+            total_accuracy += epoch_accuracy
+            total_episodes += epoch_episodes
+            total_correct += epoch_correct
+            total_query_samples += epoch_query_samples
+            
+            print(f"\n[클라이언트 {self.client_id}] Few-shot Epoch {epoch+1}/{epochs} 완료")
+            print(f"  ├─ 평균 정확도: {avg_accuracy:.4f}")
+            print(f"  ├─ 정확히 분류: {epoch_correct}/{epoch_query_samples}")
+            print(f"  └─ 처리 에피소드 수: {epoch_episodes}개\n")
+        
+        final_accuracy = total_accuracy / total_episodes if total_episodes > 0 else 0.0
+        
+        final_stats = {
+            'loss': 0.0,  # 퓨샷 학습은 loss 대신 accuracy 사용
+            'accuracy': final_accuracy,
+            'samples': total_episodes
+        }
+        
+        print(f"[클라이언트 {self.client_id}] 퓨샷 학습 완료!")
+        print(f"  ├─ 최종 정확도: {final_stats['accuracy']:.4f}")
+        print(f"  ├─ 총 정확히 분류: {total_correct}/{total_query_samples}")
+        print(f"  └─ 총 에피소드 수: {total_episodes}개\n")
+        
+        return final_stats
     
     def upload_weights(self, round_num: int, data_size: int) -> bool:
         """
@@ -163,8 +319,18 @@ class FederatedClient:
         if self.model is None:
             raise ValueError("모델이 없습니다")
         
+        print(f"[클라이언트 {self.client_id}] 가중치 업로드 준비 중...")
+        
         # 가중치 가져오기
         weights = self.model.get_state_dict()
+        
+        # 가중치 크기 계산
+        total_params = sum(p.numel() for p in weights.values())
+        total_size_mb = sum(p.numel() * 4 / (1024 * 1024) for p in weights.values())  # float32 기준
+        
+        print(f"  ├─ 총 파라미터 수: {total_params:,}개")
+        print(f"  ├─ 예상 크기: {total_size_mb:.2f} MB")
+        print(f"  └─ 데이터 크기: {data_size}개 샘플")
         
         # 직렬화
         weights_serialized = self._serialize_weights(weights)
@@ -178,6 +344,7 @@ class FederatedClient:
                 'round': round_num
             }
             
+            print(f"  └─ 서버로 전송 중... ({self.server_url})")
             response = requests.post(
                 f'{self.server_url}/upload_weights',
                 json=payload,
@@ -185,14 +352,18 @@ class FederatedClient:
             )
             
             if response.status_code == 200:
-                print(f"[클라이언트 {self.client_id}] 가중치 업로드 성공")
+                response_data = response.json()
+                received_clients = response_data.get('received_clients', 0)
+                min_clients = response_data.get('min_clients', 0)
+                print(f"[클라이언트 {self.client_id}] ✅ 가중치 업로드 성공!")
+                print(f"  └─ 서버 수신 클라이언트: {received_clients}/{min_clients}")
                 return True
             else:
-                print(f"[클라이언트 {self.client_id}] 가중치 업로드 실패: {response.status_code}")
+                print(f"[클라이언트 {self.client_id}] ❌ 가중치 업로드 실패: {response.status_code}")
                 return False
         
         except Exception as e:
-            print(f"[클라이언트 {self.client_id}] 가중치 업로드 오류: {e}")
+            print(f"[클라이언트 {self.client_id}] ❌ 가중치 업로드 오류: {e}")
             return False
     
     def fetch_aggregated_weights(self, round_num: int) -> bool:
@@ -205,29 +376,32 @@ class FederatedClient:
         Returns:
             가중치 가져오기 성공 여부
         """
+        print(f"[클라이언트 {self.client_id}] 서버에서 가중치 요청 중...")
         try:
             response = requests.get(f'{self.server_url}/get_weights', timeout=10)
             
             if response.status_code == 200:
                 data = response.json()
+                server_round = data.get('round', 0)
                 
                 # 라운드 확인
-                if data.get('round', 0) < round_num:
-                    print(f"[클라이언트 {self.client_id}] 서버 가중치가 아직 업데이트되지 않았습니다")
+                if server_round < round_num:
+                    print(f"  ⚠️  서버 가중치가 아직 업데이트되지 않았습니다 (서버 라운드: {server_round}, 요청 라운드: {round_num})")
                     return False
                 
                 # 가중치 역직렬화 및 로드
                 weights = self._deserialize_weights(data['weights'])
                 self.model.load_state_dict(weights)
                 
-                print(f"[클라이언트 {self.client_id}] 집계된 가중치 수신 완료 (라운드 {data['round']})")
+                print(f"[클라이언트 {self.client_id}] ✅ 집계된 가중치 수신 완료!")
+                print(f"  └─ 서버 라운드: {server_round}")
                 return True
             else:
-                print(f"[클라이언트 {self.client_id}] 가중치 가져오기 실패: {response.status_code}")
+                print(f"[클라이언트 {self.client_id}] ❌ 가중치 가져오기 실패: {response.status_code}")
                 return False
         
         except Exception as e:
-            print(f"[클라이언트 {self.client_id}] 가중치 가져오기 오류: {e}")
+            print(f"[클라이언트 {self.client_id}] ❌ 가중치 가져오기 오류: {e}")
             return False
     
     def _serialize_weights(self, weights: Dict) -> Dict:
@@ -269,27 +443,54 @@ class FederatedClient:
         if self.model is None:
             raise ValueError("모델이 없습니다")
         
+        print(f"\n[클라이언트 {self.client_id}] 모델 평가 시작...")
+        print(f"  └─ 평가 배치 수: {len(test_loader)}")
+        
         self.model.eval()
         total_loss = 0.0
         correct = 0
         total_samples = 0
         
+        pbar = tqdm(
+            test_loader,
+            desc=f"[클라이언트 {self.client_id}] 평가 중",
+            unit="batch",
+            ncols=100
+        )
+        
         with torch.no_grad():
-            for batch in test_loader:
+            for batch_idx, batch in enumerate(pbar):
                 images = batch['image'].to(self.device)
                 labels = batch['label'].to(self.device)
                 
                 outputs = self.model(images)
                 loss = self.criterion(outputs, labels)
                 
-                total_loss += loss.item() * images.size(0)
-                total_samples += images.size(0)
+                batch_size = images.size(0)
+                total_loss += loss.item() * batch_size
+                total_samples += batch_size
                 
                 _, predicted = torch.max(outputs.data, 1)
-                correct += (predicted == labels).sum().item()
+                batch_correct = (predicted == labels).sum().item()
+                correct += batch_correct
+                
+                # 진행 바 업데이트
+                current_acc = correct / total_samples if total_samples > 0 else 0.0
+                current_loss = total_loss / total_samples if total_samples > 0 else 0.0
+                pbar.set_postfix({
+                    'Loss': f'{current_loss:.4f}',
+                    'Acc': f'{current_acc:.4f}'
+                })
+        
+        pbar.close()
         
         accuracy = correct / total_samples if total_samples > 0 else 0.0
         avg_loss = total_loss / total_samples if total_samples > 0 else 0.0
+        
+        print(f"\n[클라이언트 {self.client_id}] ✅ 평가 완료!")
+        print(f"  ├─ 평균 손실: {avg_loss:.6f}")
+        print(f"  ├─ 정확도: {accuracy:.4f} ({correct}/{total_samples})")
+        print(f"  └─ 평가 샘플 수: {total_samples}개\n")
         
         return {
             'loss': avg_loss,

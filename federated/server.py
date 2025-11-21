@@ -86,19 +86,27 @@ class FederatedServer:
                 # 가중치 역직렬화
                 weights_deserialized = self._deserialize_weights(weights)
                 
+                # 가중치 크기 계산
+                total_params = sum(p.numel() for p in weights_deserialized.values())
+                
                 with self.lock:
                     self.client_weights[client_id] = weights_deserialized
                     self.client_sizes[client_id] = data_size
+                    received_count = len(self.client_weights)
                 
-                print(f"[서버] 클라이언트 {client_id}로부터 가중치 수신 (라운드 {round_num})")
+                print(f"[서버] ✅ 클라이언트 {client_id}로부터 가중치 수신")
+                print(f"  ├─ 라운드: {round_num}")
+                print(f"  ├─ 파라미터 수: {total_params:,}개")
+                print(f"  ├─ 데이터 크기: {data_size}개 샘플")
+                print(f"  └─ 수신된 클라이언트: {received_count}/{self.min_clients}")
                 
                 # 충분한 클라이언트가 모이면 집계
-                if len(self.client_weights) >= self.min_clients:
+                if received_count >= self.min_clients:
                     self._aggregate_weights()
                 
                 return jsonify({
                     'status': 'success',
-                    'received_clients': len(self.client_weights),
+                    'received_clients': received_count,
                     'min_clients': self.min_clients
                 })
             
@@ -146,14 +154,35 @@ class FederatedServer:
     def _aggregate_weights(self):
         """가중치 집계"""
         if len(self.client_weights) < self.min_clients:
-            print(f"[서버] 클라이언트 수 부족 ({len(self.client_weights)}/{self.min_clients})")
+            print(f"[서버] ⚠️  클라이언트 수 부족 ({len(self.client_weights)}/{self.min_clients})")
             return
         
-        print(f"[서버] 가중치 집계 시작 (클라이언트 수: {len(self.client_weights)})")
+        print(f"\n{'='*70}")
+        print(f"[서버] 가중치 집계 시작")
+        print(f"{'='*70}")
+        print(f"  ├─ 참여 클라이언트 수: {len(self.client_weights)}개")
+        print(f"  ├─ 최소 요구 클라이언트: {self.min_clients}개")
+        
+        # 클라이언트별 데이터 크기 출력
+        total_data_size = 0
+        for cid in self.client_weights.keys():
+            data_size = self.client_sizes[cid]
+            total_data_size += data_size
+            print(f"  │  └─ 클라이언트 {cid}: {data_size}개 샘플")
+        
+        print(f"  ├─ 총 데이터 크기: {total_data_size}개 샘플")
         
         # 클라이언트 가중치와 크기 리스트 생성
         weights_list = list(self.client_weights.values())
         sizes_list = [self.client_sizes[cid] for cid in self.client_weights.keys()]
+        
+        # 가중치 통계 계산
+        sample_weights = [w / total_data_size for w in sizes_list]
+        print(f"  ├─ 가중치 분포:")
+        for idx, (cid, weight) in enumerate(zip(self.client_weights.keys(), sample_weights)):
+            print(f"  │  └─ 클라이언트 {cid}: {weight:.4f} ({sizes_list[idx]}개)")
+        
+        print(f"  └─ Federated Averaging 수행 중...")
         
         # Federated Averaging 수행
         self.aggregated_weights = self.aggregator.aggregate(
@@ -163,7 +192,15 @@ class FederatedServer:
         
         self.current_round += 1
         
-        print(f"[서버] 가중치 집계 완료 (라운드 {self.current_round})")
+        # 집계된 가중치 통계
+        if self.aggregated_weights:
+            total_params = sum(p.numel() for p in self.aggregated_weights.values())
+            print(f"\n[서버] ✅ 가중치 집계 완료!")
+            print(f"  ├─ 라운드: {self.current_round}")
+            print(f"  ├─ 총 파라미터 수: {total_params:,}개")
+            print(f"  └─ 집계 방식: Federated Averaging (가중 평균)")
+        
+        print(f"{'='*70}\n")
         
         # 클라이언트 가중치 초기화 (다음 라운드 준비)
         self.client_weights = {}

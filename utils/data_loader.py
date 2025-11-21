@@ -12,6 +12,7 @@ import torch
 from torchvision import transforms
 
 from .bbox_utils import extract_bboxes_from_json, match_anomaly_regions
+from .non_iid_distribution import distribute_non_iid, analyze_client_distribution
 
 
 class DefectDataset(Dataset):
@@ -59,9 +60,24 @@ class DefectDataset(Dataset):
         """
         AprilGAN으로 이상 영역을 찾고 실제 레이블과 매칭하여 샘플 생성
         """
-        samples = []
+        print(f"\n[데이터 준비] AprilGAN으로 이상 영역 검출 중...")
+        print(f"  ├─ 총 이미지 수: {len(self.image_paths)}개")
         
-        for img_path, json_path in zip(self.image_paths, self.json_paths):
+        samples = []
+        processed_images = 0
+        total_regions = 0
+        matched_regions = 0
+        
+        from tqdm import tqdm
+        pbar = tqdm(
+            zip(self.image_paths, self.json_paths),
+            total=len(self.image_paths),
+            desc="이상 영역 검출",
+            unit="image",
+            ncols=100
+        )
+        
+        for img_path, json_path in pbar:
             # 이미지 로드
             image = cv2.imread(str(img_path))
             if image is None:
@@ -72,22 +88,25 @@ class DefectDataset(Dataset):
             # AprilGAN으로 이상 영역 검출
             anomaly_result = self.aprilgan_model.detect(image_rgb)
             anomaly_regions = anomaly_result.get('anomaly_regions', [])
+            total_regions += len(anomaly_regions)
             
             # JSON에서 실제 레이블 추출
             gt_bboxes, gt_types = extract_bboxes_from_json(json_path)
             
             # 이상 영역과 실제 레이블 매칭
-            matched_regions = match_anomaly_regions(
+            matched_regions_list = match_anomaly_regions(
                 anomaly_regions,
                 gt_bboxes,
                 gt_types
             )
             
             # 각 매칭된 영역을 샘플로 추가
-            for region, defect_type in matched_regions:
+            for region, defect_type in matched_regions_list:
                 if defect_type is None:
                     # 레이블이 없는 경우 스킵 (또는 'Unknown'으로 처리)
                     continue
+                
+                matched_regions += 1
                 
                 # 영역 추출
                 x1 = max(0, region['x1'])
@@ -106,6 +125,20 @@ class DefectDataset(Dataset):
                     'bbox': region,
                     'image_path': str(img_path)
                 })
+            
+            processed_images += 1
+            pbar.set_postfix({
+                '처리': f'{processed_images}/{len(self.image_paths)}',
+                '샘플': len(samples)
+            })
+        
+        pbar.close()
+        
+        print(f"\n[데이터 준비] ✅ 완료!")
+        print(f"  ├─ 처리된 이미지: {processed_images}개")
+        print(f"  ├─ 검출된 이상 영역: {total_regions}개")
+        print(f"  ├─ 매칭된 영역: {matched_regions}개")
+        print(f"  └─ 생성된 샘플: {len(samples)}개\n")
         
         return samples
     
@@ -158,7 +191,12 @@ def load_defect_data(
         val_loader: 검증 데이터 로더
         defect_type_to_idx: 결함 유형 인덱스 매핑
     """
+    print(f"\n{'='*70}")
+    print(f"[데이터 로딩] 데이터셋 준비 시작")
+    print(f"{'='*70}")
+    
     # 이미지와 JSON 파일 찾기
+    print(f"[1단계] 이미지 및 JSON 파일 검색 중...")
     image_paths = []
     json_paths = []
     
@@ -168,7 +206,10 @@ def load_defect_data(
             image_paths.append(img_path)
             json_paths.append(json_path)
     
+    print(f"  └─ 찾은 이미지-JSON 쌍: {len(image_paths)}개")
+    
     # 결함 유형 수집
+    print(f"\n[2단계] 결함 유형 수집 중...")
     defect_types = set()
     for json_path in json_paths:
         _, types = extract_bboxes_from_json(json_path)
@@ -177,6 +218,12 @@ def load_defect_data(
     # 'Normal' 추가 (결함이 없는 경우)
     defect_types.add('Normal')
     defect_types = sorted(list(defect_types))
+    
+    print(f"  └─ 발견된 결함 유형: {len(defect_types)}개")
+    for idx, dtype in enumerate(defect_types[:10], 1):  # 상위 10개만 출력
+        print(f"      {idx}. {dtype}")
+    if len(defect_types) > 10:
+        print(f"      ... 외 {len(defect_types) - 10}개")
     
     # 결함 유형을 인덱스로 매핑
     defect_type_to_idx = {dtype: idx for idx, dtype in enumerate(defect_types)}
@@ -191,6 +238,13 @@ def load_defect_data(
     val_image_paths = image_paths[n_train:]
     val_json_paths = json_paths[n_train:]
     
+    print(f"\n[3단계] 데이터셋 분할")
+    print(f"  ├─ 전체 이미지: {n_total}개")
+    print(f"  ├─ 학습용: {n_train}개 ({train_ratio*100:.1f}%)")
+    print(f"  └─ 검증용: {n_total - n_train}개 ({(1-train_ratio)*100:.1f}%)")
+    print(f"\n[4단계] 데이터셋 생성 중...")
+    print(f"  ├─ 학습 데이터셋 생성 중...")
+    
     # 데이터셋 생성
     train_dataset = DefectDataset(
         train_image_paths,
@@ -200,6 +254,8 @@ def load_defect_data(
         patch_size
     )
     
+    print(f"  └─ 검증 데이터셋 생성 중...")
+    
     val_dataset = DefectDataset(
         val_image_paths,
         val_json_paths,
@@ -207,6 +263,12 @@ def load_defect_data(
         defect_type_to_idx,
         patch_size
     )
+    
+    print(f"\n[5단계] DataLoader 생성")
+    print(f"  ├─ 학습 샘플 수: {len(train_dataset)}개")
+    print(f"  ├─ 검증 샘플 수: {len(val_dataset)}개")
+    print(f"  └─ 배치 크기: {batch_size}")
+    print(f"{'='*70}\n")
     
     # DataLoader 생성
     train_loader = DataLoader(
