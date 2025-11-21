@@ -106,6 +106,10 @@ class DefectDataset(Dataset):
                     # 레이블이 없는 경우 스킵 (또는 'Unknown'으로 처리)
                     continue
                 
+                # 결함 유형 정규화
+                from .bbox_utils import normalize_defect_type
+                normalized_defect_type = normalize_defect_type(defect_type)
+                
                 matched_regions += 1
                 
                 # 영역 추출
@@ -121,7 +125,7 @@ class DefectDataset(Dataset):
                 
                 samples.append({
                     'patch': patch,
-                    'label': defect_type,
+                    'label': normalized_defect_type,
                     'bbox': region,
                     'image_path': str(img_path)
                 })
@@ -159,13 +163,15 @@ class DefectDataset(Dataset):
         # 변환 적용
         patch_tensor = self.transform(patch_pil)
         
-        # 레이블 인덱스 변환
-        label_idx = self.defect_type_to_idx.get(sample['label'], 0)
+        # 레이블 정규화 및 인덱스 변환
+        from .bbox_utils import normalize_defect_type
+        normalized_label = normalize_defect_type(sample['label'])
+        label_idx = self.defect_type_to_idx.get(normalized_label, 0)
         
         return {
             'image': patch_tensor,
             'label': torch.tensor(label_idx, dtype=torch.long),
-            'defect_type': sample['label']
+            'defect_type': normalized_label
         }
 
 

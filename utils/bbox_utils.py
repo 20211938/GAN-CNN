@@ -3,9 +3,48 @@
 """
 
 import json
+import re
 import numpy as np
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
+
+
+def normalize_defect_type(defect_type: str) -> str:
+    """
+    결함 유형 이름을 정규화 (공백 제거, 오타 수정 등)
+    
+    Args:
+        defect_type: 원본 결함 유형 이름
+        
+    Returns:
+        정규화된 결함 유형 이름
+    """
+    if not defect_type:
+        return 'Unknown'
+    
+    # 앞뒤 공백 제거
+    normalized = defect_type.strip()
+    
+    # 연속된 공백을 하나로 통일
+    normalized = re.sub(r'\s+', ' ', normalized)
+    
+    # 알려진 오타 수정
+    typo_corrections = {
+        'Reocater Streaking': 'Recoater Streaking',
+        'Reocater': 'Recoater',
+        'Laser capture timing error ': 'Laser capture timing error',
+        'Recoater capture timing error ': 'Recoater capture timing error',
+    }
+    
+    # 오타 수정 적용
+    for typo, correct in typo_corrections.items():
+        if normalized == typo or normalized.startswith(typo):
+            normalized = normalized.replace(typo, correct)
+    
+    # 다시 공백 정리 (오타 수정 후 공백이 생길 수 있음)
+    normalized = re.sub(r'\s+', ' ', normalized).strip()
+    
+    return normalized if normalized else 'Unknown'
 
 
 def extract_bboxes_from_json(json_path: Path) -> Tuple[List[Dict], List[str]]:
@@ -35,6 +74,8 @@ def extract_bboxes_from_json(json_path: Path) -> Tuple[List[Dict], List[str]]:
                 'y2': tag['EndPoint']['Y']
             }
             defect_type = tag.get('Comment', tag.get('Name', 'Unknown'))
+            # 결함 유형 정규화 (공백 제거, 오타 수정)
+            defect_type = normalize_defect_type(defect_type)
             bboxes.append(bbox)
             defect_types.append(defect_type)
     
@@ -48,6 +89,8 @@ def extract_bboxes_from_json(json_path: Path) -> Tuple[List[Dict], List[str]]:
                 'y2': tag['EndPoint']['Y']
             }
             defect_type = tag.get('Comment', tag.get('Name', 'Unknown'))
+            # 결함 유형 정규화 (공백 제거, 오타 수정)
+            defect_type = normalize_defect_type(defect_type)
             bboxes.append(bbox)
             defect_types.append(defect_type)
     

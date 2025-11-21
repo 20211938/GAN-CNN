@@ -60,12 +60,14 @@ def load_client_data(
     if len(image_paths) == 0:
         raise ValueError(f"데이터 디렉토리에 이미지 파일이 없습니다: {data_dir}")
     
-    # 결함 유형 수집
-    from .bbox_utils import extract_bboxes_from_json
+    # 결함 유형 수집 (정규화 적용)
+    from .bbox_utils import extract_bboxes_from_json, normalize_defect_type
     defect_types = set()
     for json_path in json_paths:
         _, types = extract_bboxes_from_json(json_path)
-        defect_types.update(types)
+        # 이미 extract_bboxes_from_json에서 정규화되지만, 중복 제거를 위해 한 번 더 정규화
+        normalized_types = [normalize_defect_type(t) for t in types]
+        defect_types.update(normalized_types)
     
     defect_types.add('Normal')
     defect_types = sorted(list(defect_types))
