@@ -424,16 +424,7 @@ def create_all_visualizations(
         title=f"{logger.experiment_name} - 클라이언트별 성능 비교"
     )
     
-    # 3. Non-IID 분포
-    if client_distributions and defect_type_to_idx:
-        plot_non_iid_distribution(
-            client_distributions,
-            defect_type_to_idx,
-            vis_dir / "non_iid_distribution.png",
-            title=f"{logger.experiment_name} - Non-IID 데이터 분포"
-        )
-    
-    # 4. 클래스별 성능 분석
+    # 3. 클래스별 성능 분석
     if final_metrics:
         plot_class_performance(
             final_metrics,

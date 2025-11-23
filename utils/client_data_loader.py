@@ -165,35 +165,66 @@ def load_client_data(
         print(f"  └─ 발견된 결함 유형: {len(defect_types)}개")
         print(f"  └─ 전체 데이터 수: {len(image_paths)}개")
     
-    # 먼저 전체 데이터를 train/test로 분할
+    # 먼저 전체 데이터를 결함 유형별로 그룹화
     if verbose:
-        print(f"\n[2단계] 전체 데이터 train/test 분할")
+        print(f"\n[2단계] 결함 유형별 데이터 그룹화 및 train/test 분할")
     
     import random
+    from collections import defaultdict
     # 재현성을 위한 시드 설정 (선택사항)
     # random.seed(42)
     
-    # 데이터를 셔플하여 랜덤하게 분할
-    combined = list(zip(image_paths, json_paths))
-    random.shuffle(combined)
-    image_paths_shuffled, json_paths_shuffled = zip(*combined)
-    image_paths_shuffled = list(image_paths_shuffled)
-    json_paths_shuffled = list(json_paths_shuffled)
+    # 결함 유형별로 데이터 그룹화
+    defect_type_groups = defaultdict(list)
+    for img_path, json_path in zip(image_paths, json_paths):
+        _, types = extract_bboxes_from_json(json_path)
+        normalized_types = [normalize_defect_type(t) for t in types]
+        # 각 이미지가 가진 결함 유형 중 첫 번째를 기준으로 그룹화
+        # (여러 결함이 있으면 첫 번째로 분류)
+        if normalized_types:
+            primary_type = normalized_types[0]
+        else:
+            primary_type = 'Normal'
+        defect_type_groups[primary_type].append((img_path, json_path))
     
-    # Test 데이터 분리 (10%)
-    n_total = len(image_paths_shuffled)
-    n_test = int(n_total * test_ratio)
+    # 각 결함 유형별로 셔플
+    for defect_type in defect_type_groups:
+        random.shuffle(defect_type_groups[defect_type])
     
-    test_images_all = image_paths_shuffled[:n_test]
-    test_jsons_all = json_paths_shuffled[:n_test]
+    # 각 결함 유형에서 test_ratio만큼 테스트 데이터로 추출
+    test_images_all = []
+    test_jsons_all = []
+    train_images_all = []
+    train_jsons_all = []
+    test_defect_types = set()
     
-    # Train 데이터 (나머지 90%)
-    train_images_all = image_paths_shuffled[n_test:]
-    train_jsons_all = json_paths_shuffled[n_test:]
+    for defect_type, samples in defect_type_groups.items():
+        n_samples = len(samples)
+        n_test = max(1, int(n_samples * test_ratio))  # 최소 1개는 보장
+        
+        # 테스트 데이터 추출
+        test_samples = samples[:n_test]
+        test_images_all.extend([s[0] for s in test_samples])
+        test_jsons_all.extend([s[1] for s in test_samples])
+        test_defect_types.add(defect_type)  # 테스트에 포함된 결함 유형 기록
+        
+        # 학습 데이터 추출
+        train_samples = samples[n_test:]
+        train_images_all.extend([s[0] for s in train_samples])
+        train_jsons_all.extend([s[1] for s in train_samples])
     
+    # Train 데이터 셔플 (Non-IID 분배 전에)
+    combined_train = list(zip(train_images_all, train_jsons_all))
+    random.shuffle(combined_train)
+    train_images_all, train_jsons_all = zip(*combined_train)
+    train_images_all = list(train_images_all)
+    train_jsons_all = list(train_jsons_all)
+    
+    n_total = len(image_paths)
     if verbose:
         print(f"  ├─ Train 데이터: {len(train_images_all)}개 ({len(train_images_all)/n_total*100:.1f}%)")
-        print(f"  └─ Test 데이터: {len(test_images_all)}개 ({len(test_images_all)/n_total*100:.1f}%)")
+        print(f"  ├─ Test 데이터: {len(test_images_all)}개 ({len(test_images_all)/n_total*100:.1f}%)")
+        print(f"  └─ Test 데이터에 포함된 결함 유형: {len(test_defect_types)}개 (모든 결함 유형 포함)")
     
     # Train 데이터만 클라이언트별 Non-IID 분배
     if verbose:
