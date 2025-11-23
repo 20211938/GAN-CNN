@@ -26,9 +26,6 @@ python -m utils.dataset.download_labeled_layers --output data
 # 2. 연합학습 실행
 python train_federated.py --data-dir data
 
-# 고급 옵션 예시
-python train_federated.py --data-dir data --num-rounds 10 --epochs 3 --non-iid-alpha 0.1
-python train_federated.py --help  # 전체 옵션 보기
 ```
 
 ## 🎯 프로젝트 목표

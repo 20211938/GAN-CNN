@@ -25,12 +25,12 @@ class AprilGAN:
     사전 학습된 DINOv2 Vision Transformer를 사용하여 이상 영역을 탐지합니다.
     """
     
-    def __init__(self, model_path: Optional[str] = None, model_name: str = "dinov2_vitb14"):
+    def __init__(self, model_path: Optional[str] = None, model_name: str = "dinov2_vits14"):
         """
         Args:
             model_path: 사전 학습된 모델 경로 (None이면 timm에서 자동 다운로드)
-            model_name: 사용할 DINOv2 모델 이름 (기본값: dinov2_vitb14)
-                        옵션: dinov2_vits14, dinov2_vitb14, dinov2_vitl14, dinov2_vitg14
+            model_name: 사용할 DINOv2 모델 이름 (기본값: dinov2_vits14)
+                        옵션: dinov2_vits14 (small), dinov2_vitb14_reg (base), dinov2_vitl14_reg (large)
         """
         if not TIMM_AVAILABLE:
             raise RuntimeError("timm 라이브러리가 필요합니다. 'pip install timm' 명령으로 설치하세요.")
@@ -77,11 +77,94 @@ class AprilGAN:
             else:
                 # timm에서 사전 학습된 모델 자동 다운로드
                 print(f"[AprilGAN] 사전 학습된 DINOv2 모델 로드 중: {self.model_name}")
-                self.model = timm.create_model(self.model_name, pretrained=True)
-                print("[AprilGAN] ✅ 사전 학습된 모델 로드 완료")
+                
+                # timm에서 사용 가능한 모든 DINOv2 모델 찾기
+                try:
+                    all_models = timm.list_models(pretrained=True)
+                    dinov2_models = [m for m in all_models if 'dinov2' in m.lower()]
+                    
+                    if dinov2_models:
+                        print(f"[AprilGAN] 사용 가능한 DINOv2 모델: {', '.join(dinov2_models[:5])}")
+                    else:
+                        print("[AprilGAN] 경고: timm에서 DINOv2 모델을 찾을 수 없습니다.")
+                except Exception:
+                    dinov2_models = []
+                
+                # 사용 가능한 DINOv2 모델 이름 목록 (우선순위 순)
+                fallback_models = [
+                    "dinov2_vits14",  # Small (21M params)
+                    "dinov2_vits14_reg",  # Small with reg
+                    "dinov2_vitb14",  # Base
+                    "dinov2_vitb14_reg",  # Base with reg
+                    "dinov2_vitb14_reg4",  # Base variant
+                    "dinov2_vitl14",  # Large
+                    "dinov2_vitl14_reg",  # Large with reg
+                    "dinov2_vitg14",  # Giant
+                ]
+                
+                # 모델 로드 시도: 실제 사용 가능한 모델을 우선 시도
+                model_loaded = False
+                
+                # 1. 실제 사용 가능한 DINOv2 모델이 있으면 그것을 먼저 시도
+                if dinov2_models:
+                    # 사용 가능한 모델 중에서 우선순위가 높은 것 선택
+                    preferred_from_available = None
+                    for preferred in fallback_models:
+                        if preferred in dinov2_models:
+                            preferred_from_available = preferred
+                            break
+                    
+                    # 사용 가능한 모델이 있으면 그것을 먼저 시도
+                    if preferred_from_available:
+                        models_to_try = [preferred_from_available] + [m for m in dinov2_models if m != preferred_from_available]
+                    else:
+                        # 사용 가능한 모델 중 첫 번째 것 사용
+                        models_to_try = dinov2_models
+                else:
+                    # 사용 가능한 모델이 없으면 fallback 모델 시도
+                    models_to_try = [self.model_name] + [m for m in fallback_models if m != self.model_name]
+                
+                for model_name in models_to_try:
+                    try:
+                        self.model = timm.create_model(model_name, pretrained=True)
+                        self.model_name = model_name  # 실제 로드된 모델 이름으로 업데이트
+                        print(f"[AprilGAN] ✅ 사전 학습된 모델 로드 완료: {model_name}")
+                        model_loaded = True
+                        break
+                    except (RuntimeError, ValueError, KeyError) as e:
+                        # 모델을 찾을 수 없는 경우 다음 모델 시도
+                        continue
+                
+                if not model_loaded:
+                    # 모든 모델 시도 실패
+                    available_info = ""
+                    if dinov2_models:
+                        available_info = f"\n사용 가능한 DINOv2 모델: {', '.join(dinov2_models[:10])}"
+                    raise RuntimeError(
+                        f"AprilGAN 모델 로드 실패: '{self.model_name}' 및 대체 모델들을 찾을 수 없습니다.{available_info}\n"
+                        f"timm 버전을 확인하거나 'pip install --upgrade timm' 명령으로 업그레이드하세요."
+                    )
             
             self.model = self.model.to(self.device)
             self.model.eval()
+            
+            # 모델 입력 크기 확인 (timm 모델의 default_cfg에서 확인)
+            if hasattr(self.model, 'default_cfg'):
+                # timm 모델의 입력 크기 확인
+                input_size = self.model.default_cfg.get('input_size', None)
+                if input_size:
+                    if isinstance(input_size, (list, tuple)):
+                        # (3, H, W) 형식이면 H, W 추출
+                        if len(input_size) == 3:
+                            self.input_size = input_size[1]  # H 또는 W (정사각형 가정)
+                        else:
+                            self.input_size = input_size[0] if len(input_size) > 0 else 224
+                    else:
+                        self.input_size = input_size
+                else:
+                    self.input_size = 224  # 기본값
+            else:
+                self.input_size = 224  # 기본값
             
             # 패치 크기 확인 (모델에 따라 다를 수 있음)
             if hasattr(self.model, 'patch_embed'):
@@ -90,8 +173,10 @@ class AprilGAN:
                     self.patch_size = patch_size[0]
                 else:
                     self.patch_size = patch_size
+            else:
+                self.patch_size = 14  # DINOv2 기본 패치 크기
             
-            print(f"[AprilGAN] 제로샷 모델 준비 완료 (패치 크기: {self.patch_size})")
+            print(f"[AprilGAN] 제로샷 모델 준비 완료 (입력 크기: {self.input_size}x{self.input_size}, 패치 크기: {self.patch_size})")
             
         except RuntimeError:
             # RuntimeError는 그대로 전파
@@ -182,9 +267,8 @@ class AprilGAN:
         """
         h, w = image_shape
         
-        # 패치 수 계산 (DINOv2는 224x224 입력 기준)
-        # 실제 입력 크기에 따라 패치 수가 달라짐
-        input_size = 224  # DINOv2 기본 입력 크기
+        # 패치 수 계산 (실제 입력 크기에 따라 패치 수가 달라짐)
+        input_size = getattr(self, 'input_size', 224)  # 모델의 실제 입력 크기 사용
         num_patches_h = input_size // self.patch_size
         num_patches_w = input_size // self.patch_size
         
@@ -249,7 +333,7 @@ class AprilGAN:
     def _preprocess(self, image: np.ndarray) -> torch.Tensor:
         """
         이미지 전처리 (DINOv2 입력 형식에 맞춤)
-        DINOv2는 224x224 크기의 정규화된 이미지를 입력으로 받음
+        모델의 입력 크기에 맞게 동적으로 리사이즈
         """
         # RGB로 변환 (이미 RGB면 그대로 사용)
         if len(image.shape) == 3 and image.shape[2] == 3:
@@ -257,8 +341,9 @@ class AprilGAN:
         else:
             image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         
-        # DINOv2 입력 크기로 리사이즈 (224x224)
-        image_resized = cv2.resize(image_rgb, (224, 224))
+        # 모델 입력 크기로 리사이즈 (동적으로 결정됨)
+        input_size = getattr(self, 'input_size', 224)  # 기본값 224
+        image_resized = cv2.resize(image_rgb, (input_size, input_size))
         
         # [0, 255] -> [0, 1]로 정규화
         image_tensor = torch.from_numpy(image_resized).permute(2, 0, 1).float() / 255.0
