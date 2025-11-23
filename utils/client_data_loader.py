@@ -3,12 +3,74 @@
 각 클라이언트가 서로 다른 결함 유형 분포를 가지도록 데이터 분배
 """
 
+import os
+import multiprocessing
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional
 from torch.utils.data import DataLoader
 
 from .data_loader import DefectDataset, load_defect_data
 from .non_iid_distribution import distribute_non_iid, analyze_client_distribution
+
+
+def get_optimal_num_workers() -> int:
+    """
+    최적의 num_workers 수 계산
+    
+    Returns:
+        num_workers 수 (Windows에서는 0, Linux/Mac에서는 CPU 코어 수 기반)
+    """
+    # Windows에서는 multiprocessing이 spawn 방식을 사용하므로 0으로 설정
+    if os.name == 'nt':  # Windows
+        return 0
+    
+    # Linux/Mac에서는 CPU 코어 수의 절반 사용 (너무 많으면 오버헤드 발생)
+    cpu_count = multiprocessing.cpu_count()
+    return max(0, min(4, cpu_count // 2))  # 최대 4개로 제한
+
+
+def get_optimal_batch_size(
+    base_batch_size: int = 32,
+    available_memory_gb: Optional[float] = None
+) -> int:
+    """
+    GPU 메모리에 따라 최적의 배치 크기 계산
+    
+    Args:
+        base_batch_size: 기본 배치 크기
+        available_memory_gb: 사용 가능한 GPU 메모리 (GB, None이면 자동 감지)
+        
+    Returns:
+        최적의 배치 크기
+    """
+    import torch
+    
+    if not torch.cuda.is_available():
+        return base_batch_size
+    
+    try:
+        if available_memory_gb is None:
+            # GPU 메모리 자동 감지
+            gpu_memory_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+        else:
+            gpu_memory_gb = available_memory_gb
+        
+        # GPU 메모리에 따라 배치 크기 조정
+        # 8GB 이상: 기본값 유지 또는 증가
+        # 4-8GB: 기본값 유지
+        # 4GB 미만: 배치 크기 감소
+        
+        if gpu_memory_gb >= 8:
+            optimal_batch_size = base_batch_size * 2  # 메모리 여유 있으면 증가
+        elif gpu_memory_gb >= 4:
+            optimal_batch_size = base_batch_size
+        else:
+            optimal_batch_size = max(8, base_batch_size // 2)  # 최소 8개는 보장
+        
+        return optimal_batch_size
+    except Exception:
+        # 오류 발생 시 기본값 반환
+        return base_batch_size
 
 
 def load_client_data(
@@ -21,6 +83,8 @@ def load_client_data(
     batch_size: int = 32,
     patch_size: Tuple[int, int] = (224, 224),
     non_iid_alpha: float = 0.5,
+    num_workers: Optional[int] = None,
+    auto_batch_size: bool = True,
     verbose: bool = True
 ) -> Tuple[List[DataLoader], List[DataLoader], Optional[DataLoader], Dict[str, int]]:
     """
@@ -36,6 +100,8 @@ def load_client_data(
         batch_size: 배치 크기
         patch_size: CNN 입력 크기
         non_iid_alpha: Non-IID 정도 (0.1: 매우 편향, 1.0: 거의 균등, 10.0: 완전 균등)
+        num_workers: 데이터 로딩 워커 수 (None이면 자동 설정)
+        auto_batch_size: 배치 크기 자동 조정 여부
         verbose: 상세 출력 여부
         
     Returns:
@@ -44,12 +110,26 @@ def load_client_data(
         test_loader: 전체 테스트 데이터 로더 (None이면 생성 안 함)
         defect_type_to_idx: 결함 유형 인덱스 매핑
     """
+    # num_workers 자동 설정
+    if num_workers is None:
+        num_workers = get_optimal_num_workers()
+    
+    # 배치 크기 자동 조정
+    if auto_batch_size:
+        optimal_batch_size = get_optimal_batch_size(batch_size)
+        if optimal_batch_size != batch_size:
+            if verbose:
+                print(f"[최적화] 배치 크기 자동 조정: {batch_size} → {optimal_batch_size}")
+            batch_size = optimal_batch_size
+    
     if verbose:
         print(f"\n{'='*70}")
         print(f"[클라이언트별 Non-IID 데이터 로딩]")
         print(f"{'='*70}")
         print(f"  ├─ 클라이언트 수: {num_clients}개")
         print(f"  ├─ Non-IID 정도 (alpha): {non_iid_alpha}")
+        print(f"  ├─ 배치 크기: {batch_size}")
+        print(f"  ├─ 데이터 로딩 워커 수: {num_workers}개")
         print(f"  └─ alpha 설명: 작을수록 편향됨 (0.1=매우편향, 1.0=보통, 10.0=균등)")
     
     # 이미지와 JSON 파일 찾기
@@ -176,14 +256,16 @@ def load_client_data(
             train_dataset,
             batch_size=batch_size,
             shuffle=True,
-            num_workers=0
+            num_workers=num_workers,
+            pin_memory=True if num_workers > 0 else False  # GPU 사용 시 메모리 고정
         )
         
         val_loader = DataLoader(
             val_dataset,
             batch_size=batch_size,
             shuffle=False,
-            num_workers=0
+            num_workers=num_workers,
+            pin_memory=True if num_workers > 0 else False
         )
         
         train_loaders.append(train_loader)
@@ -210,7 +292,8 @@ def load_client_data(
             test_dataset,
             batch_size=batch_size,
             shuffle=False,
-            num_workers=0
+            num_workers=num_workers,
+            pin_memory=True if num_workers > 0 else False
         )
         
         if verbose:

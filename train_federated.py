@@ -99,6 +99,18 @@ def main():
         default=32,
         help='배치 크기 (기본값: 32)'
     )
+    parser.add_argument(
+        '--num-workers',
+        type=int,
+        default=None,
+        help='데이터 로딩 워커 수 (None이면 자동 설정, 기본값: None)'
+    )
+    parser.add_argument(
+        '--no-auto-batch-size',
+        action='store_false',
+        dest='auto_batch_size',
+        help='배치 크기 자동 조정 비활성화'
+    )
     
     # 데이터 분할
     parser.add_argument(
@@ -271,6 +283,8 @@ def main():
             batch_size=args.batch_size,
             patch_size=(224, 224),
             non_iid_alpha=args.non_iid_alpha,
+            num_workers=args.num_workers,
+            auto_batch_size=args.auto_batch_size,
             verbose=True
         )
         num_classes = len(defect_type_to_idx)
@@ -525,13 +539,17 @@ def main():
             
             # 모든 검증 데이터 합치기
             from torch.utils.data import ConcatDataset, DataLoader
+            from utils.client_data_loader import get_optimal_num_workers
+            
+            num_workers = args.num_workers if args.num_workers is not None else get_optimal_num_workers()
             all_val_datasets = [loader.dataset for loader in val_loaders]
             combined_val_dataset = ConcatDataset(all_val_datasets)
             combined_val_loader = DataLoader(
                 combined_val_dataset,
                 batch_size=args.batch_size,
                 shuffle=False,
-                num_workers=0
+                num_workers=num_workers,
+                pin_memory=True if num_workers > 0 else False
             )
             
             val_metrics = evaluate_model(
