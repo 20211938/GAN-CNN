@@ -81,8 +81,8 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--total-limit",
         type=int,
-        default=10000,
-        help="Maximum total number of labeled layers to download across all databases (default: 10000).",
+        default=50000,
+        help="Maximum total number of labeled layers to download across all databases (default: 50000).",
     )
     parser.add_argument(
         "--metadata",
