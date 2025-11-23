@@ -11,7 +11,7 @@ from torch.utils.data import Dataset, DataLoader
 import torch
 from torchvision import transforms
 
-from .bbox_utils import extract_bboxes_from_json, match_anomaly_regions
+from .bbox_utils import extract_bboxes_from_json
 from .non_iid_distribution import distribute_non_iid, analyze_client_distribution
 
 
@@ -58,21 +58,29 @@ class DefectDataset(Dataset):
     
     def _prepare_samples(self) -> List[Dict]:
         """
-        AprilGAN으로 이상 영역을 찾고 실제 레이블과 매칭하여 샘플 생성
+        AprilGAN으로 이상 영역을 찾고 JSON 라벨과 매칭하여 CNN 학습 샘플 생성
+        AprilGAN 검출 결과를 직접 사용하고, 각 영역에 대해 JSON의 라벨을 매칭
+        
+        - IoU >= 0.3: JSON의 실제 결함 유형 라벨 사용
+        - IoU < 0.3 또는 매칭 실패: 'False Positive' 라벨 부여
+        - 모든 AprilGAN 검출 결과를 포함하여 실제 배포 시나리오 반영
         """
-        print(f"\n[데이터 준비] AprilGAN으로 이상 영역 검출 중...")
+        print(f"\n[데이터 준비] AprilGAN으로 이상 영역 검출 및 CNN 학습 데이터 생성 중...")
         print(f"  ├─ 총 이미지 수: {len(self.image_paths)}개")
         
         samples = []
         processed_images = 0
-        total_regions = 0
-        matched_regions = 0
+        total_detections = 0  # AprilGAN이 검출한 총 영역 수
+        labeled_samples = 0  # JSON 라벨과 매칭된 샘플 수 (실제 결함)
+        unlabeled_samples = 0  # False Positive 샘플 수 (AprilGAN 오검출)
         
         from tqdm import tqdm
+        from .bbox_utils import normalize_defect_type, calculate_iou
+        
         pbar = tqdm(
             zip(self.image_paths, self.json_paths),
             total=len(self.image_paths),
-            desc="이상 영역 검출",
+            desc="이상 영역 검출 및 라벨링",
             unit="image",
             ncols=100
         )
@@ -85,38 +93,43 @@ class DefectDataset(Dataset):
             
             image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
             
-            # AprilGAN으로 이상 영역 검출
+            # AprilGAN으로 이상 영역 검출 (제로샷 모델)
             anomaly_result = self.aprilgan_model.detect(image_rgb)
-            anomaly_regions = anomaly_result.get('anomaly_regions', [])
-            total_regions += len(anomaly_regions)
+            detected_regions = anomaly_result.get('anomaly_regions', [])
+            total_detections += len(detected_regions)
             
-            # JSON에서 실제 레이블 추출
+            # JSON에서 Ground Truth 라벨 추출
             gt_bboxes, gt_types = extract_bboxes_from_json(json_path)
             
-            # 이상 영역과 실제 레이블 매칭
-            matched_regions_list = match_anomaly_regions(
-                anomaly_regions,
-                gt_bboxes,
-                gt_types
-            )
-            
-            # 각 매칭된 영역을 샘플로 추가
-            for region, defect_type in matched_regions_list:
-                if defect_type is None:
-                    # 레이블이 없는 경우 스킵 (또는 'Unknown'으로 처리)
-                    continue
+            # 각 AprilGAN 검출 영역에 대해 JSON 라벨 매칭
+            for det_region in detected_regions:
+                # 가장 높은 IoU를 가진 Ground Truth 찾기
+                best_iou = 0.0
+                best_label = None
                 
-                # 결함 유형 정규화
-                from .bbox_utils import normalize_defect_type
-                normalized_defect_type = normalize_defect_type(defect_type)
+                for gt_bbox, gt_type in zip(gt_bboxes, gt_types):
+                    iou = calculate_iou(det_region, gt_bbox)
+                    if iou > best_iou:
+                        best_iou = iou
+                        best_label = gt_type
                 
-                matched_regions += 1
+                # IoU 임계값 이상이면 JSON 라벨 사용, 아니면 'False Positive' 라벨 부여
+                iou_threshold = 0.3  # CNN 학습을 위한 매칭 임계값
+                if best_iou >= iou_threshold and best_label:
+                    # 매칭 성공: JSON의 실제 결함 유형 사용
+                    defect_type = normalize_defect_type(best_label)
+                    labeled_samples += 1
+                else:
+                    # 매칭 실패: 'False Positive' 라벨 부여 (AprilGAN이 잘못 검출한 경우)
+                    # 실제 배포 시나리오를 반영하여 모든 검출 결과를 포함
+                    defect_type = 'False Positive'
+                    unlabeled_samples += 1
                 
                 # 영역 추출
-                x1 = max(0, region['x1'])
-                y1 = max(0, region['y1'])
-                x2 = min(image_rgb.shape[1], region['x2'])
-                y2 = min(image_rgb.shape[0], region['y2'])
+                x1 = max(0, det_region['x1'])
+                y1 = max(0, det_region['y1'])
+                x2 = min(image_rgb.shape[1], det_region['x2'])
+                y2 = min(image_rgb.shape[0], det_region['y2'])
                 
                 patch = image_rgb[y1:y2, x1:x2]
                 
@@ -125,14 +138,16 @@ class DefectDataset(Dataset):
                 
                 samples.append({
                     'patch': patch,
-                    'label': normalized_defect_type,
-                    'bbox': region,
+                    'label': defect_type,
+                    'bbox': det_region,
                     'image_path': str(img_path)
                 })
             
             processed_images += 1
             pbar.set_postfix({
                 '처리': f'{processed_images}/{len(self.image_paths)}',
+                '검출': total_detections,
+                '라벨링': labeled_samples,
                 '샘플': len(samples)
             })
         
@@ -140,9 +155,10 @@ class DefectDataset(Dataset):
         
         print(f"\n[데이터 준비] ✅ 완료!")
         print(f"  ├─ 처리된 이미지: {processed_images}개")
-        print(f"  ├─ 검출된 이상 영역: {total_regions}개")
-        print(f"  ├─ 매칭된 영역: {matched_regions}개")
-        print(f"  └─ 생성된 샘플: {len(samples)}개\n")
+        print(f"  ├─ AprilGAN 검출 영역: {total_detections}개")
+        print(f"  ├─ JSON 라벨 매칭된 샘플: {labeled_samples}개 (실제 결함)")
+        print(f"  ├─ False Positive 샘플: {unlabeled_samples}개 (AprilGAN 오검출)")
+        print(f"  └─ 생성된 CNN 학습 샘플: {len(samples)}개 (모든 검출 결과 포함)\n")
         
         return samples
     

@@ -17,6 +17,7 @@ from utils.client_data_loader import load_client_data
 from utils.logger import create_logger
 from utils.checkpoint import create_checkpoint_manager
 from utils.metrics import evaluate_model, print_per_class_metrics
+from utils.aprilgan_evaluator import evaluate_aprilgan_detection
 from pathlib import Path
 import numpy as np
 
@@ -361,6 +362,50 @@ def main():
         print(f"  ❌ 데이터 로드 실패: {e}")
         print("  💡 데이터 디렉토리를 확인하거나 --data-dir 옵션을 확인하세요.")
         return
+    
+    # 2-1. AprilGAN 제로샷 모델 평가
+    print(f"\n[2-1단계] AprilGAN 제로샷 모델 평가 중...")
+    try:
+        # 평가용 이미지와 JSON 파일 수집
+        eval_image_paths = []
+        eval_json_paths = []
+        
+        for img_path in args.data_dir.glob("*.jpg"):
+            json_path = img_path.with_suffix(".jpg.json")
+            if json_path.exists():
+                eval_image_paths.append(img_path)
+                eval_json_paths.append(json_path)
+        
+        # 평가 샘플 수 제한 (전체 평가는 시간이 오래 걸릴 수 있음)
+        max_eval_samples = min(100, len(eval_image_paths))  # 최대 100개 샘플로 평가
+        if len(eval_image_paths) > max_eval_samples:
+            import random
+            indices = random.sample(range(len(eval_image_paths)), max_eval_samples)
+            eval_image_paths = [eval_image_paths[i] for i in indices]
+            eval_json_paths = [eval_json_paths[i] for i in indices]
+            print(f"  └─ 평가 샘플 수 제한: {len(eval_image_paths)}개 (전체: {len(args.data_dir.glob('*.jpg'))}개)")
+        
+        if len(eval_image_paths) > 0:
+            aprilgan_eval_results = evaluate_aprilgan_detection(
+                aprilgan_model=aprilgan,
+                image_paths=eval_image_paths,
+                json_paths=eval_json_paths,
+                iou_threshold=0.5
+            )
+            
+            # 로거에 AprilGAN 평가 결과 기록
+            if logger is not None:
+                try:
+                    logger.log_aprilgan_evaluation(aprilgan_eval_results)
+                except Exception as e:
+                    print(f"  ⚠️  AprilGAN 평가 결과 로깅 실패: {e}")
+        else:
+            print("  ⚠️  평가할 이미지가 없습니다.")
+    except Exception as e:
+        print(f"  ⚠️  AprilGAN 평가 실패: {e}")
+        print("  💡 평가를 건너뛰고 계속 진행합니다.")
+        import traceback
+        traceback.print_exc()
     
     # 3. CNN 모델 생성
     print(f"\n[3단계] CNN 모델 생성 중...")

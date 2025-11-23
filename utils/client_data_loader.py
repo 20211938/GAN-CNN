@@ -154,7 +154,10 @@ def load_client_data(
         normalized_types = [normalize_defect_type(t) for t in types]
         defect_types.update(normalized_types)
     
+    # 'Normal'과 'False Positive' 추가
+    # 'False Positive': AprilGAN이 잘못 검출한 영역 (JSON 라벨과 매칭 실패)
     defect_types.add('Normal')
+    defect_types.add('False Positive')
     defect_types = sorted(list(defect_types))
     
     # 결함 유형을 인덱스로 매핑
