@@ -15,6 +15,7 @@ from federated.server import FederatedServer
 from federated.client import FederatedClient
 from utils.client_data_loader import load_client_data
 from utils.logger import create_logger
+from utils.checkpoint import create_checkpoint_manager
 from pathlib import Path
 
 
@@ -146,6 +147,32 @@ def main():
         help='로그 저장 비활성화'
     )
     
+    # 체크포인트 옵션
+    parser.add_argument(
+        '--checkpoint-dir',
+        type=Path,
+        default=Path('checkpoints'),
+        help='체크포인트 저장 디렉토리 (기본값: checkpoints)'
+    )
+    parser.add_argument(
+        '--save-checkpoints',
+        action='store_true',
+        default=True,
+        help='체크포인트 저장 활성화 (기본값: True)'
+    )
+    parser.add_argument(
+        '--no-save-checkpoints',
+        action='store_false',
+        dest='save_checkpoints',
+        help='체크포인트 저장 비활성화'
+    )
+    parser.add_argument(
+        '--resume-from',
+        type=Path,
+        default=None,
+        help='체크포인트 파일 경로 (학습 재개용)'
+    )
+    
     args = parser.parse_args()
     
     # 최소 클라이언트 수 설정
@@ -170,8 +197,26 @@ def main():
     print(f"  ├─ 백본 모델: {args.backbone}")
     print(f"  ├─ 디바이스: {args.device}")
     print(f"  ├─ 퓨샷 학습: {'사용' if args.use_few_shot else '미사용'}")
-    print(f"  └─ 로그 저장: {'비활성화' if args.no_log else f'{args.log_dir}'}")
+    print(f"  ├─ 로그 저장: {'비활성화' if args.no_log else f'{args.log_dir}'}")
+    print(f"  └─ 체크포인트: {'비활성화' if not args.save_checkpoints else f'{args.checkpoint_dir}'}")
     print(f"{'='*70}\n")
+    
+    # 실험 설정 딕셔너리 생성 (로거와 체크포인트 매니저에서 공유)
+    config = {
+        'data_dir': str(args.data_dir),
+        'num_clients': args.num_clients,
+        'min_clients': args.min_clients,
+        'non_iid_alpha': args.non_iid_alpha,
+        'num_rounds': args.num_rounds,
+        'epochs': args.epochs,
+        'learning_rate': args.learning_rate,
+        'batch_size': args.batch_size,
+        'train_ratio': args.train_ratio,
+        'backbone': args.backbone,
+        'device': args.device,
+        'use_few_shot': args.use_few_shot,
+        'server_port': args.server_port
+    }
     
     # 로거 초기화
     logger = None
@@ -181,23 +226,6 @@ def main():
                 log_dir=args.log_dir,
                 experiment_name=args.experiment_name
             )
-            
-            # 실험 설정 기록
-            config = {
-                'data_dir': str(args.data_dir),
-                'num_clients': args.num_clients,
-                'min_clients': args.min_clients,
-                'non_iid_alpha': args.non_iid_alpha,
-                'num_rounds': args.num_rounds,
-                'epochs': args.epochs,
-                'learning_rate': args.learning_rate,
-                'batch_size': args.batch_size,
-                'train_ratio': args.train_ratio,
-                'backbone': args.backbone,
-                'device': args.device,
-                'use_few_shot': args.use_few_shot,
-                'server_port': args.server_port
-            }
             logger.log_config(config)
         except Exception as e:
             print(f"  ⚠️  로거 초기화 실패: {e}")
@@ -205,6 +233,25 @@ def main():
             import traceback
             traceback.print_exc()
             logger = None
+    
+    # 체크포인트 매니저 초기화
+    checkpoint_manager = None
+    if args.save_checkpoints:
+        try:
+            checkpoint_manager = create_checkpoint_manager(
+                checkpoint_dir=args.checkpoint_dir,
+                experiment_name=args.experiment_name,
+                save_best=True,
+                save_latest=True,
+                save_rounds=True
+            )
+            print(f"[체크포인트] 체크포인트 매니저 초기화 완료")
+        except Exception as e:
+            print(f"  ⚠️  체크포인트 매니저 초기화 실패: {e}")
+            print("  💡 체크포인트 없이 계속 진행합니다.")
+            import traceback
+            traceback.print_exc()
+            checkpoint_manager = None
     
     # 1. AprilGAN 모델 초기화
     print("[1단계] AprilGAN 모델 초기화 중...")
@@ -270,6 +317,22 @@ def main():
     )
     print(f"  └─ 완료! (클래스 수: {num_classes})\n")
     
+    # 체크포인트에서 재개 (있는 경우)
+    start_round = 0
+    if args.resume_from is not None and checkpoint_manager is not None:
+        try:
+            checkpoint = checkpoint_manager.load_checkpoint(
+                args.resume_from,
+                cnn_model,
+                device=torch.device(args.device)
+            )
+            start_round = checkpoint.get('round', 0) + 1
+            print(f"[체크포인트] ✅ 학습 재개: 라운드 {start_round}부터 시작")
+        except Exception as e:
+            print(f"  ⚠️  체크포인트 로드 실패: {e}")
+            print("  💡 처음부터 학습을 시작합니다.")
+            start_round = 0
+    
     # 4. 서버 시작
     print(f"[4단계] 연합학습 서버 시작 중...")
     server = FederatedServer(
@@ -310,7 +373,7 @@ def main():
     print(f"[6단계] 연합학습 라운드 실행")
     print(f"{'='*70}\n")
     
-    for round_num in range(args.num_rounds):
+    for round_num in range(start_round, args.num_rounds):
         print(f"\n{'='*70}")
         print(f"라운드 {round_num + 1}/{args.num_rounds}")
         print(f"{'='*70}")
@@ -383,6 +446,31 @@ def main():
         # 라운드 로그 기록
         if logger is not None:
             logger.log_round(round_num + 1, client_stats_list, server_stats)
+        
+        # 체크포인트 저장
+        if checkpoint_manager is not None and aggregated_weights is not None:
+            # 집계된 가중치로 모델 업데이트
+            cnn_model.load_state_dict(aggregated_weights)
+            
+            # 평균 성능 계산
+            avg_accuracy = sum(c.get('accuracy', 0) for c in client_stats_list) / len(client_stats_list) if client_stats_list else 0.0
+            avg_loss = sum(c.get('loss', 0) for c in client_stats_list) / len(client_stats_list) if client_stats_list else 0.0
+            
+            # 최고 성능 확인
+            is_best = checkpoint_manager.update_best(avg_accuracy, round_num + 1)
+            
+            # 체크포인트 저장
+            checkpoint_manager.save_checkpoint(
+                model=cnn_model,
+                round_num=round_num + 1,
+                metrics={
+                    'accuracy': avg_accuracy,
+                    'loss': avg_loss,
+                    'num_clients': len(client_stats_list)
+                },
+                config=config,
+                is_best=is_best
+            )
         
         print(f"\n라운드 {round_num + 1} 완료!")
         print(f"{'='*70}\n")
@@ -473,6 +561,9 @@ def main():
     print(f"연합학습 완료!")
     if logger is not None:
         print(f"로그 저장 위치: {logger.get_log_path()}")
+    if checkpoint_manager is not None:
+        print(f"체크포인트 저장 위치: {checkpoint_manager.get_checkpoint_dir()}")
+        print(f"  - 최고 성능: {checkpoint_manager.best_accuracy:.4f} (라운드 {checkpoint_manager.best_round})")
     print(f"{'='*70}\n")
     
     # 서버 종료

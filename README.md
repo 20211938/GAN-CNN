@@ -306,10 +306,14 @@ GAN-CNN/
 │   ├── client_data_loader.py  # 클라이언트별 Non-IID 데이터 로더
 │   ├── non_iid_distribution.py  # Non-IID 데이터 분배 알고리즘
 │   ├── few_shot_dataset.py  # 퓨샷 학습 데이터셋
+│   ├── checkpoint.py    # 모델 체크포인트 저장/로드
+│   ├── logger.py        # 학습 로그 기록
 │   └── bbox_utils.py    # 바운딩박스 처리
 ├── demo/                # 데모 및 예제
 │   └── federated_learning_demo.ipynb  # 전체 파이프라인 시연
 ├── data/                # 데이터 디렉토리
+├── checkpoints/         # 모델 체크포인트 저장 디렉토리
+├── logs/                # 학습 로그 저장 디렉토리
 └── utils/dataset/       # 데이터셋 관리 스크립트
 ```
 
@@ -399,7 +403,33 @@ python train_federated.py --data-dir data --backbone resnet50
 python train_federated.py --help
 ```
 
-### 4. Jupyter Notebook 데모 실행
+### 4. 모델 체크포인트 저장
+
+학습 중 모델이 자동으로 저장됩니다:
+
+```bash
+# 기본 실행 (체크포인트 자동 저장)
+python train_federated.py --data-dir data
+```
+
+**체크포인트 저장 위치:**
+- `checkpoints/experiment_YYYYMMDD_HHMMSS/` 디렉토리에 저장됩니다
+- 각 라운드마다 `round_XXX.pth` 파일로 저장
+- 최고 성능 모델은 `best_model.pth`로 자동 저장
+- 최신 모델은 `latest_model.pth`로 저장
+
+**체크포인트 구조:**
+```
+checkpoints/
+└── experiment_20240101_120000/
+    ├── round_001.pth          # 라운드 1 체크포인트
+    ├── round_002.pth          # 라운드 2 체크포인트
+    ├── latest_model.pth       # 최신 모델
+    ├── best_model.pth         # 최고 성능 모델
+    └── checkpoint_metadata.json  # 메타데이터
+```
+
+### 5. Jupyter Notebook 데모 실행
 
 대화형 데모를 실행하려면:
 
@@ -409,7 +439,7 @@ jupyter notebook demo/federated_learning_demo.ipynb
 
 데모 노트북은 Non-IID 데이터 분배를 포함한 전체 파이프라인을 시연합니다.
 
-### 5. Python 코드로 직접 실행
+### 6. Python 코드로 직접 실행
 
 프로그래밍 방식으로 세밀한 제어가 필요한 경우:
 
