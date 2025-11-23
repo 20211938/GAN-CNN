@@ -308,6 +308,7 @@ GAN-CNN/
 │   ├── few_shot_dataset.py  # 퓨샷 학습 데이터셋
 │   ├── checkpoint.py    # 모델 체크포인트 저장/로드
 │   ├── logger.py        # 학습 로그 기록
+│   ├── visualization.py # 학습 과정 시각화 도구
 │   └── bbox_utils.py    # 바운딩박스 처리
 ├── demo/                # 데모 및 예제
 │   └── federated_learning_demo.ipynb  # 전체 파이프라인 시연
@@ -345,13 +346,6 @@ MongoDB에서 데이터를 다운로드합니다:
 
 ```bash
 python -m utils.dataset.download_labeled_layers --output data
-```
-
-또는 Python 코드로 실행:
-
-```python
-from utils.dataset.download_labeled_layers import main as download_data
-download_data()  # MongoDB에서 데이터 다운로드
 ```
 
 ### 2. 데이터 분석 (선택사항)
@@ -439,7 +433,39 @@ jupyter notebook demo/federated_learning_demo.ipynb
 
 데모 노트북은 Non-IID 데이터 분배를 포함한 전체 파이프라인을 시연합니다.
 
-### 6. Python 코드로 직접 실행
+### 6. 학습 과정 시각화
+
+학습이 완료되면 자동으로 시각화 그래프가 생성됩니다:
+
+**생성되는 그래프:**
+- `logs/experiment_YYYYMMDD_HHMMSS/visualizations/` 디렉토리에 저장됩니다
+- `training_curves.png`: 라운드별 평균 손실 및 정확도 곡선
+- `client_performance_comparison.png`: 클라이언트별 성능 비교 차트
+- `non_iid_distribution.png`: Non-IID 데이터 분포 히트맵
+- `class_performance.png`: 클래스별 성능 분석 (Precision, Recall, F1-Score)
+
+**시각화 예시:**
+```
+logs/
+└── experiment_20240101_120000/
+    ├── visualizations/
+    │   ├── training_curves.png          # 학습 곡선
+    │   ├── client_performance_comparison.png  # 클라이언트 비교
+    │   ├── non_iid_distribution.png    # Non-IID 분포
+    │   └── class_performance.png       # 클래스별 성능
+    ├── experiment_log.json            # 전체 로그
+    ├── summary.json                   # 실험 요약
+    ├── rounds.csv                     # 라운드별 통계
+    └── clients.csv                    # 클라이언트별 통계
+```
+
+**시각화 기능:**
+- ✅ 실시간 학습 곡선 (Loss, Accuracy)
+- ✅ 클라이언트별 성능 비교 차트
+- ✅ Non-IID 분포 시각화 (히트맵)
+- ✅ 클래스별 성능 분석 (Precision, Recall, F1-Score)
+
+### 7. Python 코드로 직접 실행
 
 프로그래밍 방식으로 세밀한 제어가 필요한 경우:
 

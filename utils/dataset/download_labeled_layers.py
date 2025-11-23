@@ -74,17 +74,6 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         help="Overwrite files that already exist in the output folder.",
     )
     parser.add_argument(
-        "--limit",
-        type=int,
-        help="Maximum number of labeled layers to download per database.",
-    )
-    parser.add_argument(
-        "--total-limit",
-        type=int,
-        default=50000,
-        help="Maximum total number of labeled layers to download across all databases (default: 50000).",
-    )
-    parser.add_argument(
         "--metadata",
         action="store_true",
         default=True,
@@ -220,13 +209,10 @@ def download_for_db(
     fs: gridfs.GridFS,
     output_dir: Path,
     overwrite: bool,
-    limit: Optional[int],
     persist_metadata: bool,
     dry_run: bool,
     debug: bool = False,
-    total_downloaded: int = 0,
-    total_limit: Optional[int] = None,
-) -> Tuple[DownloadResult, int]:
+) -> DownloadResult:
     result = DownloadResult()
     collection: Collection = db["LayersModelDB"]
 
@@ -246,44 +232,16 @@ def download_for_db(
             print(f"[DEBUG] Sample GridFS file metadata: {sample_file.metadata}")
         else:
             print(f"[DEBUG] No files found in GridFS")
-        
-        # Count total GridFS files
-        try:
-            total_files = len(list(fs.find().limit(10000)))  # Limit to avoid memory issues
-            print(f"[DEBUG] Total GridFS files (sampled): {total_files}")
-        except Exception as e:
-            print(f"[DEBUG] Could not count GridFS files: {e}")
-
-    # 전체 제한이 있는 경우, 남은 개수만큼만 다운로드
-    remaining_limit = None
-    if total_limit is not None:
-        remaining_limit = max(0, total_limit - total_downloaded)
-        if remaining_limit == 0:
-            print(f"[{db_name}] Total limit reached. Skipping this database.")
-            return result, total_downloaded
     
-    # 데이터베이스별 제한과 전체 제한 중 작은 값 사용
-    effective_limit = limit
-    if remaining_limit is not None:
-        if effective_limit is None:
-            effective_limit = remaining_limit
-        else:
-            effective_limit = min(effective_limit, remaining_limit)
+    # 비어있는 컬렉션 확인 (빠른 체크)
+    sample_count = collection.count_documents(truthy_filter(), limit=1)
+    if sample_count == 0:
+        print(f"[{db_name}] No labeled layers found. Skipping.")
+        return result
     
-    cursor = (
-        collection.find(truthy_filter(), sort=[("LayerNum", 1)])
-        if effective_limit is None
-        else collection.find(truthy_filter(), sort=[("LayerNum", 1)]).limit(effective_limit)
-    )
-
-    # 진행 상황 표시를 위한 카운터
-    processed_count = 0
+    cursor = collection.find(truthy_filter(), sort=[("LayerNum", 1)])
     
     for doc in cursor:
-        # 전체 제한 체크
-        if total_limit is not None and total_downloaded >= total_limit:
-            print(f"[{db_name}] Total limit ({total_limit}) reached. Stopping download.")
-            break
         layer_num = doc.get("LayerNum")
         layer_idx = doc.get("LayerIdx")
         extension = doc.get("Extension", "jpg").lstrip(".")
@@ -298,9 +256,8 @@ def download_for_db(
         # 이미 존재하는 파일은 GridFS 쿼리를 건너뛰어 성능 향상
         if target_path.exists() and not overwrite:
             result.skipped_existing += 1
-            processed_count += 1
-            # 출력 빈도 줄이기 (100개마다 또는 10%마다)
-            if result.skipped_existing % 100 == 0 or result.skipped_existing == 1:
+            # 출력 최소화 (1000개마다만 출력)
+            if result.skipped_existing % 1000 == 0:
                 print(f"[{db_name}] Skipped {result.skipped_existing} existing files...")
             continue  # GridFS 쿼리 건너뛰기
 
@@ -345,84 +302,30 @@ def download_for_db(
                 file_id = grid_file._id
 
         if file_id is None:
-            # Only print first few missing layers to avoid spam
-            if len(result.missing_layers) < 5:
-                print(f"[{db_name}] Missing layer data for LayerNum={layer_num}, LayerIdx={layer_idx}")
-            elif len(result.missing_layers) == 5:
-                print(f"[{db_name}] ... (suppressing further missing layer messages)")
+            # Missing layers는 조용히 기록만 (출력 최소화)
             result.missing_layers.append(layer_num)
             result.missing_layers_with_docs.append(str(doc.get("_id")))
-            processed_count += 1
             continue
 
         content = fs.get(file_id).read()
         saved = write_bytes(target_path, content, overwrite)
         if saved:
             result.downloaded += 1
-            total_downloaded += 1
-            processed_count += 1
-            # 출력 빈도 줄이기 (10개마다 또는 10%마다)
-            if result.downloaded % 10 == 0 or result.downloaded == 1:
-                print(f"[{db_name}] Downloaded {result.downloaded} files ({total_downloaded}/{total_limit if total_limit else 'unlimited'})")
+            # 출력 빈도 줄이기 (100개마다만 출력)
+            if result.downloaded % 100 == 0:
+                print(f"[{db_name}] Downloaded {result.downloaded} files...")
             if persist_metadata:
                 write_metadata(target_path, doc)
         else:
             result.skipped_existing += 1
-            processed_count += 1
-            if result.skipped_existing % 100 == 0:
-                print(f"[{db_name}] Skipped {result.skipped_existing} existing files...")
 
-    return result, total_downloaded
-
-
-def count_existing_files(output_dir: Path) -> int:
-    """
-    출력 디렉토리에 이미 존재하는 이미지 파일 개수 확인
-    
-    Args:
-        output_dir: 출력 디렉토리 경로
-        
-    Returns:
-        존재하는 이미지 파일 개수
-    """
-    if not output_dir.exists():
-        return 0
-    
-    # .jpg 파일 개수 확인
-    jpg_count = len(list(output_dir.glob("*.jpg")))
-    return jpg_count
+    return result
 
 
 def main(argv: Optional[Sequence[str]] = None) -> None:
     args = parse_args(argv)
     output_dir: Path = args.output
     output_dir.mkdir(parents=True, exist_ok=True)
-
-    # 이미 존재하는 파일 개수 확인
-    existing_count = count_existing_files(output_dir)
-    
-    # 실제 다운로드할 개수 계산
-    if args.total_limit is not None:
-        if existing_count >= args.total_limit:
-            print(f"이미 {existing_count}개의 파일이 있습니다. 목표 개수({args.total_limit})에 도달했습니다.")
-            print("추가 다운로드가 필요하지 않습니다.")
-            return
-        
-        remaining_to_download = args.total_limit - existing_count
-        print(f"\n{'='*70}")
-        print(f"다운로드 계획")
-        print(f"{'='*70}")
-        print(f"  ├─ 이미 존재하는 파일: {existing_count}개")
-        print(f"  ├─ 목표 파일 수: {args.total_limit}개")
-        print(f"  └─ 추가 다운로드 필요: {remaining_to_download}개")
-        print(f"{'='*70}\n")
-        
-        # total_limit을 남은 개수로 조정
-        adjusted_total_limit = remaining_to_download
-    else:
-        adjusted_total_limit = None
-        print(f"\n이미 존재하는 파일: {existing_count}개")
-        print(f"제한 없이 다운로드합니다.\n")
 
     client = build_client(args)
     db_names = resolve_databases(client, args)
@@ -431,60 +334,42 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         print("No databases matched criteria. Nothing to do.")
         return
 
-    print(f"Processing {len(db_names)} database(s): {', '.join(db_names)}")
-    if adjusted_total_limit is not None:
-        print(f"Adjusted total download limit: {adjusted_total_limit} (original: {args.total_limit})")
-    else:
-        print(f"Total download limit: {args.total_limit}")
+    print(f"Processing {len(db_names)} database(s): {', '.join(db_names)}\n")
     
     total = DownloadResult()
-    total_downloaded = 0
 
     for db_name in db_names:
-        print(f"\n==> Database: {db_name}")
+        print(f"==> Database: {db_name}")
         db = client[db_name]
         fs = ensure_collections(db, db_name)
         if not fs:
             continue
 
-        result, total_downloaded = download_for_db(
+        result = download_for_db(
             db_name=db_name,
             db=db,
             fs=fs,
             output_dir=output_dir,
             overwrite=args.overwrite,
-            limit=args.limit,
             persist_metadata=args.metadata,
             dry_run=args.dry_run,
             debug=args.debug,
-            total_downloaded=total_downloaded,
-            total_limit=adjusted_total_limit,
         )
         total.extend(result)
         
-        # 전체 제한에 도달했으면 중단
-        if adjusted_total_limit is not None and total_downloaded >= adjusted_total_limit:
-            print(f"\nTotal limit ({adjusted_total_limit}) reached. Stopping download.")
-            break
+        # 진행 상황 출력
+        if result.downloaded > 0 or result.skipped_existing > 0:
+            print(f"[{db_name}] 완료: 다운로드 {result.downloaded}개, 건너뜀 {result.skipped_existing}개\n")
 
-    print("\n" + "=" * 60)
+    print("=" * 60)
     print("Download Summary")
     print("=" * 60)
-    print(f"Previously existing: {existing_count}")
     print(f"Downloaded: {total.downloaded}")
     print(f"Skipped existing: {total.skipped_existing}")
-    print(f"Total downloaded in this session: {total_downloaded}")
-    if args.total_limit is not None:
-        final_count = existing_count + total_downloaded
-        print(f"Total files now: {final_count} / {args.total_limit}")
     if total.missing_layers:
         print(f"Missing layers: {len(total.missing_layers)}")
-        if len(total.missing_layers) <= 10:
-            print("Layer numbers:", total.missing_layers)
     if total.missing_layers_with_docs:
-        print(
-            f"Docs without GridFS data: {len(total.missing_layers_with_docs)}"
-        )
+        print(f"Docs without GridFS data: {len(total.missing_layers_with_docs)}")
 
 
 if __name__ == "__main__":

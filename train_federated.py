@@ -290,13 +290,13 @@ def main():
         num_classes = len(defect_type_to_idx)
         
         # 클라이언트별 분포를 로거에 기록
+        client_distributions = {}
         if logger is not None:
             try:
                 from utils.bbox_utils import extract_bboxes_from_json, normalize_defect_type
-                client_distributions = {}
+                from collections import defaultdict
                 
-                # load_client_data에서 반환된 client_data를 사용할 수 없으므로
-                # 데이터셋에서 직접 샘플 수만 기록
+                # 클라이언트별 결함 유형 분포 수집
                 for client_id in range(args.num_clients):
                     train_dataset = train_loaders[client_id].dataset
                     val_dataset = val_loaders[client_id].dataset
@@ -305,13 +305,41 @@ def main():
                     train_samples = len(train_dataset)
                     val_samples = len(val_dataset)
                     
-                    # 결함 유형 통계는 간단하게 샘플 수만 기록
-                    # (정확한 분포는 이미 analyze_client_distribution에서 출력됨)
+                    # 결함 유형별 샘플 수 수집
+                    defect_distribution = defaultdict(int)
+                    
+                    # Train 데이터셋에서 결함 유형 수집
+                    for idx in range(len(train_dataset)):
+                        try:
+                            sample = train_dataset[idx]
+                            if isinstance(sample, tuple) and len(sample) >= 2:
+                                label = sample[1]
+                                if isinstance(label, int):
+                                    # 인덱스를 결함 유형 이름으로 변환
+                                    idx_to_defect_type = {idx: dtype for dtype, idx in defect_type_to_idx.items()}
+                                    defect_type = idx_to_defect_type.get(label, 'Unknown')
+                                    defect_distribution[defect_type] += 1
+                        except Exception:
+                            continue
+                    
+                    # Val 데이터셋에서도 수집
+                    for idx in range(len(val_dataset)):
+                        try:
+                            sample = val_dataset[idx]
+                            if isinstance(sample, tuple) and len(sample) >= 2:
+                                label = sample[1]
+                                if isinstance(label, int):
+                                    idx_to_defect_type = {idx: dtype for dtype, idx in defect_type_to_idx.items()}
+                                    defect_type = idx_to_defect_type.get(label, 'Unknown')
+                                    defect_distribution[defect_type] += 1
+                        except Exception:
+                            continue
+                    
                     client_distributions[client_id] = {
                         'total_samples': total_samples,
                         'train_samples': train_samples,
                         'val_samples': val_samples,
-                        'defect_distribution': {}  # 나중에 필요시 추가 가능
+                        'defect_distribution': dict(defect_distribution)
                     }
                 
                 logger.log_client_distribution(client_distributions)
@@ -319,6 +347,16 @@ def main():
                 print(f"  ⚠️  클라이언트 분포 로깅 실패: {e}")
                 import traceback
                 traceback.print_exc()
+                # 빈 분포로 초기화
+                for client_id in range(args.num_clients):
+                    train_dataset = train_loaders[client_id].dataset
+                    val_dataset = val_loaders[client_id].dataset
+                    client_distributions[client_id] = {
+                        'total_samples': len(train_dataset) + len(val_dataset),
+                        'train_samples': len(train_dataset),
+                        'val_samples': len(val_dataset),
+                        'defect_distribution': {}
+                    }
     except Exception as e:
         print(f"  ❌ 데이터 로드 실패: {e}")
         print("  💡 데이터 디렉토리를 확인하거나 --data-dir 옵션을 확인하세요.")
@@ -529,7 +567,22 @@ def main():
                 }
                 
                 logger.log_final_results(final_results)
-                logger.save()
+                
+                # 시각화 생성 (클라이언트 분포와 결함 유형 매핑 전달)
+                try:
+                    from utils.visualization import create_all_visualizations
+                    create_all_visualizations(
+                        logger=logger,
+                        client_distributions=client_distributions,
+                        defect_type_to_idx=defect_type_to_idx,
+                        final_metrics=test_metrics
+                    )
+                except Exception as e:
+                    print(f"  ⚠️  시각화 생성 실패: {e}")
+                    import traceback
+                    traceback.print_exc()
+                
+                logger.save(create_visualizations=False)  # 이미 생성했으므로 False
         else:
             print("  ⚠️  테스트 데이터셋이 없습니다. 검증 데이터로 평가합니다.")
             
@@ -570,12 +623,28 @@ def main():
                 }
                 
                 logger.log_final_results(final_results)
-                logger.save()
+                
+                # 시각화 생성
+                try:
+                    from utils.visualization import create_all_visualizations
+                    create_all_visualizations(
+                        logger=logger,
+                        client_distributions=client_distributions,
+                        defect_type_to_idx=defect_type_to_idx,
+                        final_metrics=val_metrics
+                    )
+                except Exception as e:
+                    print(f"  ⚠️  시각화 생성 실패: {e}")
+                    import traceback
+                    traceback.print_exc()
+                
+                logger.save(create_visualizations=False)  # 이미 생성했으므로 False
     else:
         print("  ⚠️  최종 가중치를 가져올 수 없습니다")
         if logger is not None:
             logger.log_final_results({'error': '최종 가중치를 가져올 수 없음'})
-            logger.save()
+            # 시각화는 생성하지 않음 (에러 상황)
+            logger.save(create_visualizations=False)
     
     print(f"\n{'='*70}")
     print(f"연합학습 완료!")

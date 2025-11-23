@@ -202,8 +202,13 @@ class FederatedLearningLogger:
         print(f"\n[로거] 최종 결과 기록 완료")
         print(f"  실행 시간: {duration:.2f}초 ({duration/60:.2f}분)")
     
-    def save(self):
-        """로그를 파일로 저장"""
+    def save(self, create_visualizations: bool = True):
+        """
+        로그를 파일로 저장
+        
+        Args:
+            create_visualizations: 시각화 생성 여부
+        """
         if self.save_json:
             json_path = self.experiment_dir / "experiment_log.json"
             with open(json_path, 'w', encoding='utf-8') as f:
@@ -212,6 +217,16 @@ class FederatedLearningLogger:
         
         # 요약 파일 생성
         self._save_summary()
+        
+        # 시각화 생성
+        if create_visualizations:
+            try:
+                from .visualization import create_all_visualizations
+                create_all_visualizations(self)
+            except Exception as e:
+                print(f"[로거] ⚠️  시각화 생성 실패: {e}")
+                import traceback
+                traceback.print_exc()
         
         print(f"[로거] 모든 로그 저장 완료: {self.experiment_dir}")
     
