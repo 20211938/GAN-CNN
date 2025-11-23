@@ -15,104 +15,21 @@
 
 ## 🚀 빠른 시작
 
-### 전체 파이프라인 실행 (3단계)
+**⚠️ 설치:** 먼저 [INSTALLATION.md](INSTALLATION.md) 파일에 따라 환경을 설정하세요.
+
+### 실행
 
 ```bash
 # 1. 데이터 준비 (MongoDB에서 다운로드)
 python -m utils.dataset.download_labeled_layers --output data
 
 # 2. 연합학습 실행
-python train_federated.py --data-dir data --num-rounds 5 --epochs 2
-
-# 3. 결과 확인
-# 학습 과정이 콘솔에 실시간으로 출력됩니다
-```
-
-### 기본 실행
-
-```bash
-# 기본 설정으로 실행 (3개 클라이언트, 3 라운드)
 python train_federated.py --data-dir data
+
+# 고급 옵션 예시
+python train_federated.py --data-dir data --num-rounds 10 --epochs 3 --non-iid-alpha 0.1
+python train_federated.py --help  # 전체 옵션 보기
 ```
-
-### 고급 옵션
-
-```bash
-# 매우 편향된 Non-IID 환경에서 학습
-python train_federated.py --data-dir data --non-iid-alpha 0.1
-
-# 더 많은 라운드와 에폭으로 학습
-python train_federated.py --data-dir data --num-rounds 10 --epochs 3
-
-# ResNet50 백본 사용
-python train_federated.py --data-dir data --backbone resnet50
-
-# 모든 옵션 보기
-python train_federated.py --help
-```
-
-## 📦 설치 방법
-
-### 필수 요구사항
-
-- **Python**: 3.8 이상 (권장: 3.9 이상)
-- **pip**: Python 패키지 관리자
-- **NVIDIA GPU**: CUDA를 지원하는 NVIDIA GPU
-- **CUDA Toolkit**: GPU 가속을 위한 CUDA Toolkit (필수: CUDA 12.8)
-
-### 설치 단계
-
-자세한 설치 가이드는 [INSTALLATION.md](INSTALLATION.md)를 참고하세요.
-
-1. **CUDA Toolkit 12.8 설치** (필수)
-   - [NVIDIA CUDA Toolkit 다운로드](https://developer.nvidia.com/cuda-downloads)
-   - Local(exe)로 설치
-   - 필수 버전: CUDA 12.8
-
-2. **가상 환경 생성 및 활성화**
-   ```powershell
-   # 가상 환경 생성
-   python -m venv venv
-   
-   # 가상 환경 활성화 (PowerShell)
-   .\venv\Scripts\Activate.ps1
-   ```
-
-3. **기본 패키지 설치**
-   ```powershell
-   # pip 업그레이드
-   python -m pip install --upgrade pip
-   
-   # 기본 패키지 설치 (OpenCV, NumPy 등)
-   pip install opencv-python numpy pandas pillow matplotlib seaborn scikit-learn scikit-image tqdm flask requests
-   ```
-
-4. **PyTorch CUDA 12.8 버전 설치** (중요!)
-   ```powershell
-   # CUDA 12.8 직접 지원 버전
-   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
-   ```
-
-5. **나머지 패키지 설치**
-   ```powershell
-   # 데이터베이스 및 기타 패키지
-   pip install pymongo python-dotenv jupyter ipykernel
-   ```
-
-6. **설치 확인**
-   ```powershell
-   # Python에서 확인
-   python -c "import cv2; import torch; print('OpenCV:', cv2.__version__); print('PyTorch:', torch.__version__); print('CUDA available:', torch.cuda.is_available())"
-   ```
-
-7. **환경 변수 설정**
-   - 프로젝트 루트에 `.env` 파일 생성
-   - MongoDB 연결 정보 입력 (자세한 내용은 [INSTALLATION.md](INSTALLATION.md) 참고)
-
-**⚠️ 중요: 가상 환경이 활성화되어 있는지 확인하세요!**
-- PowerShell 프롬프트 앞에 `(venv)`가 표시되어야 합니다
-- 가상 환경이 활성화되지 않으면 패키지가 시스템 Python에 설치될 수 있습니다
-- `cv2` 모듈 오류가 발생하면 가상 환경이 활성화되었는지 확인하세요
 
 ## 🎯 프로젝트 목표
 
@@ -150,19 +67,36 @@ Non-IID 데이터 학습          Non-IID 데이터 학습          Non-IID 데�
 ### AprilGAN + CNN 파이프라인
 
 ```
-원본 이미지
+원본 이미지 (JPG)
     ↓
-[AprilGAN] 제로샷 이상 탐지 (학습 불필요)
+[1단계] AprilGAN 제로샷 이상 탐지
+    ├─ DINOv2 Vision Transformer 기반
+    ├─ 추가 학습 없이 바로 사용
+    └─ 이상 영역 검출 (바운딩박스)
     ↓
-이상 영역 마스크/좌표 (어디에 이상이 있는지)
+[2단계] AprilGAN 성능 평가 (독립 평가)
+    ├─ 검출 결과 vs Ground Truth 비교
+    ├─ Precision, Recall, F1-Score, IoU 계산
+    └─ 제로샷 모델의 성능 측정
     ↓
-[CNN] 결함 유형 분류 (연합학습)
+[3단계] CNN 학습 데이터 생성
+    ├─ AprilGAN 검출 영역 직접 사용
+    ├─ JSON 라벨과 IoU 기반 매칭
+    ├─ 매칭 성공: 실제 결함 유형 라벨
+    └─ 매칭 실패: 'False Positive' 라벨 (AprilGAN 오검출)
     ↓
-결함 유형 ("Super Elevation", "Crack", etc.)
+[4단계] CNN 결함 유형 분류 (연합학습)
+    ├─ AprilGAN 검출 영역 패치 입력
+    ├─ JSON 라벨을 정답지로 학습/평가
+    └─ 모든 검출 결과 포함 (실제 배포 시나리오 반영)
+    ↓
+최종 결과: 결함 유형 분류
 ```
 
-- **AprilGAN**: 제로샷 비전 이상탐지 모델 - 추가 학습 없이 바로 사용 가능
-- **CNN**: 결함 유형별 분류 성능 극대화 - 연합학습으로 협력 학습
+**핵심 원칙:**
+- **AprilGAN**: 제로샷 비전 이상탐지 모델 (DINOv2 기반) - 추가 학습 없이 바로 사용 가능
+- **CNN**: 결함 유형별 분류 - 연합학습으로 협력 학습
+- **실제 배포 시나리오 반영**: AprilGAN의 모든 검출 결과를 CNN에 포함하여 실제 성능 평가
 
 ### 핵심 원칙
 
@@ -184,8 +118,9 @@ Non-IID 데이터 학습          Non-IID 데이터 학습          Non-IID 데�
 - 모든 클라이언트에서 동일한 모델을 사용하므로 연합학습이 필요 없습니다
 
 **특징**:
-- 사전 학습된 모델로 추가 학습 불필요
+- **DINOv2 Vision Transformer 기반**: 사전 학습된 대규모 모델 사용
 - 원본 이미지를 그대로 입력받아 이상 영역 마스크와 좌표를 출력
+- **제로샷 평가**: Ground Truth와 비교하여 독립적으로 성능 평가 (Precision, Recall, F1-Score, IoU)
 - **단점**: 이상이 있다는 것은 알 수 있지만, 어떤 종류의 결함인지는 알 수 없음
 
 ### CNN 모델
@@ -198,25 +133,49 @@ Non-IID 데이터 학습          Non-IID 데이터 학습          Non-IID 데�
 - AprilGAN이 이미 이상 영역을 찾아주므로, CNN은 순수하게 분류 작업만 수행하면 됩니다
 
 **특징**:
-- AprilGAN이 찾은 이상 영역 패치를 입력으로 받아 결함 유형 분류
+- **AprilGAN 검출 결과 직접 사용**: AprilGAN이 찾은 모든 영역을 CNN 학습 데이터로 사용
+- **실제 배포 시나리오 반영**: AprilGAN 오검출(False Positive)도 포함하여 학습
+- **JSON 라벨 기반 학습/평가**: JSON의 Ground Truth 라벨을 정답지로 사용
 - 연합학습을 통해 여러 클라이언트의 지식을 통합 학습
 - 가중치만 서버로 전송하여 데이터 프라이버시 보장
 - ResNet18/34/50 백본 지원
 
-### 두 모델의 협력
+### 두 모델의 협력 및 평가
 
 ```
 원본 이미지
     ↓
-[AprilGAN] "여기에 이상이 있어요!" (위치만 알려줌)
+[AprilGAN] 제로샷 이상 탐지
+    ├─ "여기에 이상이 있어요!" (위치만 알려줌)
+    └─ 검출 결과: [영역1, 영역2, 영역3, ...]
     ↓
-이상 영역 패치
+[AprilGAN 평가] (독립 평가)
+    ├─ 검출 결과 vs JSON Ground Truth 비교
+    ├─ Precision, Recall, F1-Score, IoU 계산
+    └─ 제로샷 모델의 성능 측정
     ↓
-[CNN] "이건 'Super Elevation' 결함이에요!" (종류를 알려줌)
+[CNN 학습 데이터 생성]
+    ├─ AprilGAN 검출 영역 직접 사용
+    ├─ JSON 라벨과 IoU 매칭
+    ├─ 매칭 성공 → 실제 결함 유형 라벨
+    └─ 매칭 실패 → 'False Positive' 라벨
+    ↓
+[CNN] 결함 유형 분류 (연합학습)
+    ├─ "영역1은 'Super Elevation'이에요!"
+    ├─ "영역2는 'False Positive'예요!" (AprilGAN 오검출)
+    └─ JSON 라벨을 정답지로 평가
 ```
 
+**핵심 특징:**
 - **AprilGAN**: "어디에" 문제가 있는지 찾아냄 (제로샷, 학습 불필요)
+- **AprilGAN 평가**: Ground Truth와 비교하여 독립적으로 성능 평가
 - **CNN**: "무엇인지" 분류함 (연합학습으로 성능 향상)
+- **실제 배포 시나리오**: AprilGAN의 모든 검출 결과를 CNN에 포함하여 실제 성능 평가
+
+**CNN 학습 데이터 구성:**
+- **실제 결함**: AprilGAN 검출 영역 + JSON 라벨 매칭 성공 → 실제 결함 유형
+- **False Positive**: AprilGAN 검출 영역 + JSON 라벨 매칭 실패 → 'False Positive' 라벨
+- 모든 AprilGAN 검출 결과를 포함하여 실제 배포 환경과 동일한 조건으로 평가
 
 ## 🔄 연합학습 전략
 
@@ -275,294 +234,11 @@ AprilGAN과 CNN은 순차적 파이프라인 구조이므로, **CNN만 연합학
 - 예: 클라이언트 A는 주로 "Super Elevation" 결함, 클라이언트 B는 주로 "Crack" 결함
 - 실제 산업 환경에서 매우 흔한 상황 (각 기업의 공정 특성에 따라 결함 유형이 다름)
 
-**구현 방식:**
-- **Dirichlet 분포** 기반 데이터 분배
-- `alpha` 파라미터로 편향 정도 조절 가능:
-  - `alpha = 0.1`: 매우 편향 (각 클라이언트가 특정 결함 유형에 집중)
-  - `alpha = 0.5`: 보통 편향 (현실적인 Non-IID) ⭐ 권장
-  - `alpha = 1.0`: 약간 편향
-  - `alpha = 10.0`: 거의 균등 (IID에 가까움)
-
 **Non-IID의 중요성:**
 - 실제 연합학습 환경을 정확히 시뮬레이션
 - 각 클라이언트의 데이터 분포 차이로 인한 학습 난이도 증가
 - Federated Averaging의 효과를 검증하기 위한 필수 요소
 
-## 🗂️ 프로젝트 구조
-
-```
-GAN-CNN/
-├── train_federated.py   # 연합학습 실행 스크립트 (메인)
-├── models/              # 모델 구현
-│   ├── aprilgan.py      # AprilGAN 제로샷 모델 래퍼
-│   ├── cnn.py           # CNN 결함 분류 모델
-│   └── few_shot_cnn.py  # 퓨샷 학습 CNN 모델
-├── federated/           # 연합학습 프레임워크
-│   ├── server.py        # 연합학습 서버 (가중치 집계)
-│   ├── client.py        # 연합학습 클라이언트 (로컬 학습)
-│   └── aggregator.py    # Federated Averaging 알고리즘
-├── utils/               # 유틸리티
-│   ├── data_loader.py   # 데이터 로딩 및 전처리
-│   ├── client_data_loader.py  # 클라이언트별 Non-IID 데이터 로더
-│   ├── non_iid_distribution.py  # Non-IID 데이터 분배 알고리즘
-│   ├── few_shot_dataset.py  # 퓨샷 학습 데이터셋
-│   ├── checkpoint.py    # 모델 체크포인트 저장/로드
-│   ├── logger.py        # 학습 로그 기록
-│   ├── metrics.py       # 성능 평가 메트릭 (Precision, Recall, F1-Score 등)
-│   ├── visualization.py # 학습 과정 시각화 도구
-│   ├── bbox_utils.py    # 바운딩박스 처리
-│   └── dataset/        # 데이터셋 관리 스크립트
-│       ├── download_labeled_layers.py  # MongoDB에서 데이터 다운로드
-│       ├── analyze_defect_types.py    # 결함 유형 분석
-│       └── cleanup_dataset.py          # 데이터셋 정리 (소수 클래스 제거)
-├── demo/                # 데모 및 예제
-│   └── federated_learning_demo.ipynb  # 전체 파이프라인 시연
-├── data/                # 데이터 디렉토리
-├── checkpoints/         # 모델 체크포인트 저장 디렉토리
-├── logs/                # 학습 로그 저장 디렉토리
-├── requirements.txt     # Python 패키지 의존성 목록
-└── INSTALLATION.md      # 설치 가이드
-```
-
-### 주요 모듈 설명
-
-1. **데이터 처리** (`utils/`)
-   - `data_loader.py`: 데이터 로딩 및 전처리
-   - `client_data_loader.py`: 클라이언트별 Non-IID 데이터 로더
-   - `non_iid_distribution.py`: Non-IID 데이터 분배 알고리즘
-   - `bbox_utils.py`: 바운딩박스 처리 및 결함 유형 정규화
-   - 각 클라이언트는 자체 데이터만 처리 (데이터는 외부로 전송되지 않음)
-
-2. **데이터셋 관리** (`utils/dataset/`)
-   - `download_labeled_layers.py`: MongoDB GridFS에서 데이터 다운로드
-   - `analyze_defect_types.py`: 결함 유형 분석 및 통계 생성
-   - `cleanup_dataset.py`: 소수 클래스 및 의미 없는 결함 유형 제거
-
-3. **AprilGAN** (`models/aprilgan.py`)
-   - 제로샷 이상 탐지 모델 래퍼
-   - 사전 학습된 모델로 추가 학습 불필요
-   - 모든 클라이언트에서 동일한 모델 사용
-   - 이상 영역을 자동으로 검출
-
-4. **CNN** (`models/`)
-   - `cnn.py`: ResNet 기반 결함 분류 모델
-   - `few_shot_cnn.py`: 퓨샷 학습 지원 CNN 모델
-   - AprilGAN이 찾은 이상 영역을 입력으로 받아 분류
-   - 로컬 데이터로 학습 → 가중치만 서버로 전송
-
-5. **연합 학습** (`federated/`)
-   - `server.py`: 연합학습 서버 (가중치 수신, Federated Averaging, 가중치 배포)
-   - `client.py`: 연합학습 클라이언트 (로컬 학습, 가중치 업로드/다운로드)
-   - `aggregator.py`: Federated Averaging 알고리즘 구현
-
-6. **학습 관리** (`utils/`)
-   - `checkpoint.py`: 모델 체크포인트 저장/로드
-   - `logger.py`: 학습 로그 기록 (JSON, CSV 형식)
-   - `metrics.py`: 성능 평가 메트릭 (Accuracy, Precision, Recall, F1-Score, Confusion Matrix)
-   - `visualization.py`: 학습 과정 시각화 (학습 곡선, 클라이언트 비교, Non-IID 분포 등)
-
-7. **퓨샷 학습** (`utils/`)
-   - `few_shot_dataset.py`: N-way K-shot 에피소드 생성
-   - 제한된 데이터로도 효과적인 학습 가능
-
-## 🎮 사용 방법
-
-### 1. 데이터 준비
-
-MongoDB에서 데이터를 다운로드합니다:
-
-```bash
-python -m utils.dataset.download_labeled_layers --output data
-```
-
-### 2. 데이터 분석 (선택사항)
-
-데이터셋의 결함 유형을 분석합니다:
-
-```bash
-python -m utils.dataset.analyze_defect_types --data-dir data
-```
-
-### 3. 데이터 정리 (선택사항)
-
-소수 클래스 및 의미 없는 이름을 가진 결함 유형 데이터를 삭제합니다:
-
-```bash
-# 미리보기 (실제 삭제하지 않음)
-python -m utils.dataset.cleanup_dataset --data-dir data --dry-run
-
-# 실제 정리 실행 (전체 데이터의 1% 미만인 결함 유형 삭제)
-python -m utils.dataset.cleanup_dataset --data-dir data
-```
-
-### 4. 연합학습 실행
-
-**명령줄 인터페이스로 실행 (권장):**
-
-```bash
-# 기본 설정으로 실행
-python train_federated.py --data-dir data
-
-# Non-IID 정도 조절
-python train_federated.py --data-dir data --non-iid-alpha 0.1
-
-# 더 많은 라운드와 에폭으로 학습
-python train_federated.py --data-dir data --num-rounds 10 --epochs 3
-
-# 배치 크기와 학습률 조절
-python train_federated.py --data-dir data --batch-size 64 --learning-rate 0.0001
-
-# ResNet50 백본 사용
-python train_federated.py --data-dir data --backbone resnet50
-```
-
-**주요 옵션:**
-
-| 옵션 | 설명 | 기본값 |
-|------|------|--------|
-| `--data-dir` | 데이터 디렉토리 경로 | `data` |
-| `--num-clients` | 클라이언트 수 | `3` |
-| `--non-iid-alpha` | Non-IID 정도 (0.1: 매우 편향, 0.5: 보통, 10.0: 균등) | `0.5` |
-| `--num-rounds` | 연합학습 라운드 수 | `3` |
-| `--epochs` | 각 라운드당 로컬 학습 에폭 수 | `1` |
-| `--batch-size` | 배치 크기 | `32` |
-| `--learning-rate` | 학습률 | `0.001` |
-| `--backbone` | CNN 백본 모델 (resnet18/resnet34/resnet50) | `resnet18` |
-| `--server-port` | 서버 포트 | `5000` |
-
-**전체 옵션 보기:**
-
-```bash
-python train_federated.py --help
-```
-
-### 5. 모델 체크포인트 저장
-
-학습 중 모델이 자동으로 저장됩니다:
-
-```bash
-# 기본 실행 (체크포인트 자동 저장)
-python train_federated.py --data-dir data
-```
-
-**체크포인트 저장 위치:**
-- `checkpoints/experiment_YYYYMMDD_HHMMSS/` 디렉토리에 저장됩니다
-- 각 라운드마다 `round_XXX.pth` 파일로 저장
-- 최고 성능 모델은 `best_model.pth`로 자동 저장
-- 최신 모델은 `latest_model.pth`로 저장
-
-**체크포인트 구조:**
-```
-checkpoints/
-└── experiment_20240101_120000/
-    ├── round_001.pth          # 라운드 1 체크포인트
-    ├── round_002.pth          # 라운드 2 체크포인트
-    ├── latest_model.pth       # 최신 모델
-    ├── best_model.pth         # 최고 성능 모델
-    └── checkpoint_metadata.json  # 메타데이터
-```
-
-### 6. Jupyter Notebook 데모 실행
-
-대화형 데모를 실행하려면:
-
-```bash
-jupyter notebook demo/federated_learning_demo.ipynb
-```
-
-데모 노트북은 Non-IID 데이터 분배를 포함한 전체 파이프라인을 시연합니다.
-
-### 7. 학습 과정 시각화
-
-학습이 완료되면 자동으로 시각화 그래프가 생성됩니다:
-
-**생성되는 그래프:**
-- `logs/experiment_YYYYMMDD_HHMMSS/visualizations/` 디렉토리에 저장됩니다
-- `training_curves.png`: 라운드별 평균 손실 및 정확도 곡선
-- `client_performance_comparison.png`: 클라이언트별 성능 비교 차트
-- `non_iid_distribution.png`: Non-IID 데이터 분포 히트맵
-- `class_performance.png`: 클래스별 성능 분석 (Precision, Recall, F1-Score)
-
-**시각화 예시:**
-```
-logs/
-└── experiment_20240101_120000/
-    ├── visualizations/
-    │   ├── training_curves.png          # 학습 곡선
-    │   ├── client_performance_comparison.png  # 클라이언트 비교
-    │   ├── non_iid_distribution.png    # Non-IID 분포
-    │   └── class_performance.png       # 클래스별 성능
-    ├── experiment_log.json            # 전체 로그
-    ├── summary.json                   # 실험 요약
-    ├── rounds.csv                     # 라운드별 통계
-    └── clients.csv                    # 클라이언트별 통계
-```
-
-**시각화 기능:**
-- ✅ 실시간 학습 곡선 (Loss, Accuracy)
-- ✅ 클라이언트별 성능 비교 차트
-- ✅ Non-IID 분포 시각화 (히트맵)
-- ✅ 클래스별 성능 분석 (Precision, Recall, F1-Score)
-
-### 8. Python 코드로 직접 실행
-
-프로그래밍 방식으로 세밀한 제어가 필요한 경우:
-
-```python
-from pathlib import Path
-from models.aprilgan import AprilGAN
-from models.cnn import create_cnn_model
-from federated.server import FederatedServer
-from federated.client import FederatedClient
-from utils.client_data_loader import load_client_data
-
-# 1. AprilGAN 초기화
-aprilgan = AprilGAN()
-
-# 2. Non-IID 데이터 로드
-train_loaders, val_loaders, defect_type_to_idx = load_client_data(
-    data_dir=Path("data"),
-    aprilgan_model=aprilgan,
-    num_clients=3,
-    non_iid_alpha=0.5,
-    train_ratio=0.8,
-    batch_size=32
-)
-
-# 3. 모델 생성
-num_classes = len(defect_type_to_idx)
-cnn_model = create_cnn_model(num_classes=num_classes)
-
-# 4. 서버 시작
-server = FederatedServer(port=5000, num_clients=3, min_clients=2)
-server.set_initial_weights(cnn_model.state_dict())
-server.start()  # 별도 스레드에서 실행
-
-# 5. 클라이언트 생성 및 학습
-clients = []
-for client_id in range(3):
-    client = FederatedClient(
-        client_id=client_id,
-        server_url='http://localhost:5000',
-        model=cnn_model
-    )
-    clients.append(client)
-
-# 6. 연합학습 라운드 실행
-for round_num in range(3):
-    # 가중치 수신
-    for client in clients:
-        client.fetch_aggregated_weights(round_num)
-    
-    # 로컬 학습
-    for client in clients:
-        client.train_local(train_loaders[client.client_id], epochs=1)
-    
-    # 가중치 업로드
-    for client in clients:
-        data_size = len(train_loaders[client.client_id].dataset)
-        client.upload_weights(round_num, data_size)
-```
 
 ## 📈 기대 효과
 
