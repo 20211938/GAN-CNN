@@ -16,11 +16,13 @@ def load_client_data(
     aprilgan_model,
     num_clients: int = 3,
     train_ratio: float = 0.8,
+    val_ratio: float = 0.2,
+    test_ratio: float = 0.1,
     batch_size: int = 32,
     patch_size: Tuple[int, int] = (224, 224),
     non_iid_alpha: float = 0.5,
     verbose: bool = True
-) -> Tuple[List[DataLoader], List[DataLoader], Dict[str, int]]:
+) -> Tuple[List[DataLoader], List[DataLoader], Optional[DataLoader], Dict[str, int]]:
     """
     클라이언트별 Non-IID 데이터를 로드하고 DataLoader 생성
     
@@ -28,7 +30,9 @@ def load_client_data(
         data_dir: 데이터 디렉토리 경로
         aprilgan_model: AprilGAN 모델
         num_clients: 클라이언트 수
-        train_ratio: 학습 데이터 비율
+        train_ratio: 학습 데이터 비율 (train 데이터 중에서, 기본값: 0.8)
+        val_ratio: 검증 데이터 비율 (train 데이터 중에서, 기본값: 0.2)
+        test_ratio: 테스트 데이터 비율 (전체 데이터 중에서, 기본값: 0.1)
         batch_size: 배치 크기
         patch_size: CNN 입력 크기
         non_iid_alpha: Non-IID 정도 (0.1: 매우 편향, 1.0: 거의 균등, 10.0: 완전 균등)
@@ -37,6 +41,7 @@ def load_client_data(
     Returns:
         train_loaders: 클라이언트별 학습 데이터 로더 리스트
         val_loaders: 클라이언트별 검증 데이터 로더 리스트
+        test_loader: 전체 테스트 데이터 로더 (None이면 생성 안 함)
         defect_type_to_idx: 결함 유형 인덱스 매핑
     """
     if verbose:
@@ -78,14 +83,45 @@ def load_client_data(
     if verbose:
         print(f"\n[1단계] 전체 데이터 분석")
         print(f"  └─ 발견된 결함 유형: {len(defect_types)}개")
+        print(f"  └─ 전체 데이터 수: {len(image_paths)}개")
     
-    # Non-IID 분배
+    # 먼저 전체 데이터를 train/test로 분할
     if verbose:
-        print(f"\n[2단계] Non-IID 분배 수행 중...")
+        print(f"\n[2단계] 전체 데이터 train/test 분할")
+    
+    import random
+    # 재현성을 위한 시드 설정 (선택사항)
+    # random.seed(42)
+    
+    # 데이터를 셔플하여 랜덤하게 분할
+    combined = list(zip(image_paths, json_paths))
+    random.shuffle(combined)
+    image_paths_shuffled, json_paths_shuffled = zip(*combined)
+    image_paths_shuffled = list(image_paths_shuffled)
+    json_paths_shuffled = list(json_paths_shuffled)
+    
+    # Test 데이터 분리 (10%)
+    n_total = len(image_paths_shuffled)
+    n_test = int(n_total * test_ratio)
+    
+    test_images_all = image_paths_shuffled[:n_test]
+    test_jsons_all = json_paths_shuffled[:n_test]
+    
+    # Train 데이터 (나머지 90%)
+    train_images_all = image_paths_shuffled[n_test:]
+    train_jsons_all = json_paths_shuffled[n_test:]
+    
+    if verbose:
+        print(f"  ├─ Train 데이터: {len(train_images_all)}개 ({len(train_images_all)/n_total*100:.1f}%)")
+        print(f"  └─ Test 데이터: {len(test_images_all)}개 ({len(test_images_all)/n_total*100:.1f}%)")
+    
+    # Train 데이터만 클라이언트별 Non-IID 분배
+    if verbose:
+        print(f"\n[3단계] Train 데이터 클라이언트별 Non-IID 분배 수행 중...")
     
     client_data = distribute_non_iid(
-        image_paths=image_paths,
-        json_paths=json_paths,
+        image_paths=train_images_all,
+        json_paths=train_jsons_all,
         num_clients=num_clients,
         alpha=non_iid_alpha
     )
@@ -99,15 +135,15 @@ def load_client_data(
     val_loaders = []
     
     if verbose:
-        print(f"[3단계] 클라이언트별 데이터셋 생성 중...")
+        print(f"\n[4단계] 클라이언트별 데이터셋 생성 중...")
     
     for client_id, (client_images, client_jsons) in enumerate(client_data):
         if verbose:
             print(f"\n  [클라이언트 {client_id}] 데이터셋 생성 중...")
         
-        # 학습/검증 분할
-        n_total = len(client_images)
-        n_train = int(n_total * train_ratio)
+        # 학습/검증 분할 (train 데이터 중에서)
+        n_total_client = len(client_images)
+        n_train = int(n_total_client * train_ratio)
         
         train_images = client_images[:n_train]
         train_jsons = client_jsons[:n_train]
@@ -115,8 +151,8 @@ def load_client_data(
         val_jsons = client_jsons[n_train:]
         
         if verbose:
-            print(f"    ├─ 학습용: {n_train}개")
-            print(f"    └─ 검증용: {n_total - n_train}개")
+            print(f"    ├─ 학습용: {n_train}개 ({n_train/n_total_client*100:.1f}%)")
+            print(f"    └─ 검증용: {n_total_client - n_train}개 ({(n_total_client-n_train)/n_total_client*100:.1f}%)")
         
         # 데이터셋 생성
         train_dataset = DefectDataset(
@@ -156,10 +192,34 @@ def load_client_data(
         if verbose:
             print(f"    └─ 완료! (학습 샘플: {len(train_dataset)}개, 검증 샘플: {len(val_dataset)}개)")
     
+    # 전체 테스트 데이터셋 생성
+    test_loader = None
+    if len(test_images_all) > 0:
+        if verbose:
+            print(f"\n[5단계] 전체 테스트 데이터셋 생성 중...")
+        
+        test_dataset = DefectDataset(
+            test_images_all,
+            test_jsons_all,
+            aprilgan_model,
+            defect_type_to_idx,
+            patch_size
+        )
+        
+        test_loader = DataLoader(
+            test_dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=0
+        )
+        
+        if verbose:
+            print(f"  └─ 테스트 샘플: {len(test_dataset)}개")
+    
     if verbose:
         print(f"\n{'='*70}")
         print(f"[클라이언트별 Non-IID 데이터 로딩] ✅ 완료!")
         print(f"{'='*70}\n")
     
-    return train_loaders, val_loaders, defect_type_to_idx
+    return train_loaders, val_loaders, test_loader, defect_type_to_idx
 

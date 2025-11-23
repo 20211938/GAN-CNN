@@ -16,7 +16,9 @@ from federated.client import FederatedClient
 from utils.client_data_loader import load_client_data
 from utils.logger import create_logger
 from utils.checkpoint import create_checkpoint_manager
+from utils.metrics import evaluate_model, print_per_class_metrics
 from pathlib import Path
+import numpy as np
 
 
 def main():
@@ -48,8 +50,8 @@ def main():
     parser.add_argument(
         '--num-clients',
         type=int,
-        default=3,
-        help='클라이언트 수 (기본값: 3)'
+        default=5,
+        help='클라이언트 수 (기본값: 5)'
     )
     parser.add_argument(
         '--min-clients',
@@ -261,7 +263,7 @@ def main():
     # 2. 데이터 로드
     print("[2단계] Non-IID 데이터 로드 중...")
     try:
-        train_loaders, val_loaders, defect_type_to_idx = load_client_data(
+        train_loaders, val_loaders, test_loader, defect_type_to_idx = load_client_data(
             data_dir=args.data_dir,
             aprilgan_model=aprilgan,
             num_clients=args.num_clients,
@@ -475,9 +477,9 @@ def main():
         print(f"\n라운드 {round_num + 1} 완료!")
         print(f"{'='*70}\n")
     
-    # 7. 최종 평가
+    # 7. 최종 평가 (테스트 데이터셋 사용)
     print(f"\n{'='*70}")
-    print(f"[7단계] 최종 모델 평가")
+    print(f"[7단계] 최종 모델 평가 (테스트 데이터셋)")
     print(f"{'='*70}\n")
     
     # 최종 가중치로 모델 업데이트
@@ -486,71 +488,71 @@ def main():
         cnn_model.load_state_dict(final_weights)
         print("✅ 최종 집계된 가중치로 모델 업데이트 완료\n")
         
-        # 모든 클라이언트의 검증 데이터로 평가
-        cnn_model.eval()
-        total_correct = 0
-        total_samples = 0
-        
-        for client_id, val_loader in enumerate(val_loaders):
-            client_correct = 0
-            client_samples = 0
+        # 테스트 데이터셋으로 평가
+        if test_loader is not None:
+            # 클래스 이름 리스트 생성 (idx_to_defect_type)
+            idx_to_defect_type = {idx: defect_type for defect_type, idx in defect_type_to_idx.items()}
+            class_names = [idx_to_defect_type.get(i, f"Class_{i}") for i in range(num_classes)]
             
-            with torch.no_grad():
-                for batch in val_loader:
-                    images = batch['image'].to(args.device)
-                    labels = batch['label'].to(args.device)
-                    
-                    outputs = cnn_model(images)
-                    _, predicted = torch.max(outputs, 1)
-                    
-                    batch_size = labels.size(0)
-                    client_samples += batch_size
-                    client_correct += (predicted == labels).sum().item()
+            # 클래스별 성능 평가
+            test_metrics = evaluate_model(
+                model=cnn_model,
+                data_loader=test_loader,
+                device=torch.device(args.device),
+                num_classes=num_classes,
+                class_names=class_names
+            )
             
-            client_accuracy = client_correct / client_samples if client_samples > 0 else 0.0
-            print(f"  클라이언트 {client_id}: {client_accuracy:.4f} ({client_correct}/{client_samples})")
+            # 클래스별 성능 출력
+            print_per_class_metrics(test_metrics, "서버 모델 최종 성능 평가 (테스트 데이터셋)")
             
-            total_samples += client_samples
-            total_correct += client_correct
-        
-        overall_accuracy = total_correct / total_samples if total_samples > 0 else 0.0
-        print(f"\n  전체 모델 정확도: {overall_accuracy:.4f} ({total_correct}/{total_samples})")
-        
-        # 최종 결과를 로거에 기록
-        if logger is not None:
-            final_results = {
-                'overall_accuracy': overall_accuracy,
-                'total_correct': total_correct,
-                'total_samples': total_samples,
-                'client_results': {}
-            }
-            
-            # 클라이언트별 결과 추가
-            for client_id, val_loader in enumerate(val_loaders):
-                client_correct = 0
-                client_samples = 0
-                
-                with torch.no_grad():
-                    for batch in val_loader:
-                        images = batch['image'].to(args.device)
-                        labels = batch['label'].to(args.device)
-                        
-                        outputs = cnn_model(images)
-                        _, predicted = torch.max(outputs, 1)
-                        
-                        batch_size = labels.size(0)
-                        client_samples += batch_size
-                        client_correct += (predicted == labels).sum().item()
-                
-                client_accuracy = client_correct / client_samples if client_samples > 0 else 0.0
-                final_results['client_results'][client_id] = {
-                    'accuracy': client_accuracy,
-                    'correct': client_correct,
-                    'total': client_samples
+            # 최종 결과를 로거에 기록
+            if logger is not None:
+                final_results = {
+                    'test_metrics': test_metrics,
+                    'class_names': class_names,
+                    'test_samples': test_metrics['total_samples']
                 }
+                
+                logger.log_final_results(final_results)
+                logger.save()
+        else:
+            print("  ⚠️  테스트 데이터셋이 없습니다. 검증 데이터로 평가합니다.")
             
-            logger.log_final_results(final_results)
-            logger.save()
+            # 검증 데이터로 평가 (폴백)
+            idx_to_defect_type = {idx: defect_type for defect_type, idx in defect_type_to_idx.items()}
+            class_names = [idx_to_defect_type.get(i, f"Class_{i}") for i in range(num_classes)]
+            
+            # 모든 검증 데이터 합치기
+            from torch.utils.data import ConcatDataset, DataLoader
+            all_val_datasets = [loader.dataset for loader in val_loaders]
+            combined_val_dataset = ConcatDataset(all_val_datasets)
+            combined_val_loader = DataLoader(
+                combined_val_dataset,
+                batch_size=args.batch_size,
+                shuffle=False,
+                num_workers=0
+            )
+            
+            val_metrics = evaluate_model(
+                model=cnn_model,
+                data_loader=combined_val_loader,
+                device=torch.device(args.device),
+                num_classes=num_classes,
+                class_names=class_names
+            )
+            
+            print_per_class_metrics(val_metrics, "서버 모델 최종 성능 평가 (검증 데이터셋)")
+            
+            if logger is not None:
+                final_results = {
+                    'val_metrics': val_metrics,
+                    'class_names': class_names,
+                    'val_samples': val_metrics['total_samples']
+                }
+                
+                logger.log_final_results(final_results)
+                logger.save()
     else:
         print("  ⚠️  최종 가중치를 가져올 수 없습니다")
         if logger is not None:
