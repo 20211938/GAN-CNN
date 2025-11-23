@@ -75,7 +75,7 @@ def is_meaningless_name(name: str) -> bool:
 
 def cleanup_dataset(
     data_dir: Path,
-    min_ratio: float = 0.01,
+    min_ratio: float = 0.05,
     min_count: Optional[int] = None,
     dry_run: bool = False,
     verbose: bool = True,

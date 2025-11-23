@@ -63,8 +63,6 @@ def analyze_defect_dataset(data_dir: str = "data"):
         print(f"\n[오류] 데이터 디렉토리가 없습니다: {data_dir}")
         return
     
-    print(f"\n[데이터 분석] 디렉토리: {data_dir}")
-    
     # 통계 정보
     defect_type_counts = Counter()
     defect_type_samples = defaultdict(list)  # 각 결함 유형별 샘플 경로
@@ -105,8 +103,6 @@ def analyze_defect_dataset(data_dir: str = "data"):
                     
         except Exception as e:
             continue
-    
-    print(f"  - 검사한 파일 수: {total_images}개\n")
     
     # 결과 출력
     print("\n" + "=" * 60)
@@ -159,19 +155,6 @@ def analyze_defect_dataset(data_dir: str = "data"):
     for category, items in categories.items():
         if items:
             print(f"\n  [{category}] {len(items)}개")
-            for defect_type, count in sorted(items, key=lambda x: x[1], reverse=True):
-                print(f"    - {defect_type}: {count}개")
-    
-    # 각 결함 유형별 샘플 경로 (상위 3개)
-    print("\n" + "=" * 60)
-    print("[결함 유형별 샘플 이미지 경로] (상위 10개 유형, 각 3개씩)")
-    print("=" * 60)
-    
-    for defect_type, count in sorted_types[:10]:
-        samples = defect_type_samples[defect_type][:3]
-        print(f"\n  {defect_type} ({count}개)")
-        for idx, sample_path in enumerate(samples, 1):
-            print(f"    {idx}. {Path(sample_path).name}")
     
     # 클래스 불균형 분석
     print("\n" + "=" * 60)
@@ -199,20 +182,23 @@ def analyze_defect_dataset(data_dir: str = "data"):
     print("[학습 권장 사항]")
     print("=" * 60)
     
-    # 30개 미만인 클래스
-    minor_classes = [(dt, count) for dt, count in sorted_types if count < 30 and dt != "Normal"]
+    # 5% 미만인 클래스
+    min_threshold = max(1, int(total_images * 0.05))  # 전체의 5%
+    minor_classes = [(dt, count) for dt, count in sorted_types if count < min_threshold and dt != "Normal"]
     if minor_classes:
-        print(f"\n  [소수 클래스 제거 권장] (30개 미만)")
+        print(f"\n  [소수 클래스 제거 권장] (5% 미만, {min_threshold}개 미만)")
         for defect_type, count in minor_classes:
-            print(f"    - {defect_type}: {count}개")
+            percentage = count / total_images * 100 if total_images > 0 else 0
+            print(f"    - {defect_type}: {count}개 ({percentage:.2f}%)")
         print(f"    총 {len(minor_classes)}개 클래스, {sum(c for _, c in minor_classes)}개 샘플")
     
-    # 30개 이상인 클래스
-    major_classes = [(dt, count) for dt, count in sorted_types if count >= 30 or dt == "Normal"]
+    # 5% 이상인 클래스
+    major_classes = [(dt, count) for dt, count in sorted_types if count >= min_threshold or dt == "Normal"]
     if major_classes:
-        print(f"\n  [학습 가능한 클래스] (30개 이상)")
+        print(f"\n  [학습 가능한 클래스] (5% 이상, {min_threshold}개 이상)")
         for defect_type, count in sorted(major_classes, key=lambda x: x[1], reverse=True):
-            print(f"    - {defect_type}: {count}개")
+            percentage = count / total_images * 100 if total_images > 0 else 0
+            print(f"    - {defect_type}: {count}개 ({percentage:.2f}%)")
         print(f"    총 {len(major_classes)}개 클래스, {sum(c for _, c in major_classes)}개 샘플")
     
     print("\n" + "=" * 60)

@@ -356,7 +356,19 @@ python -m utils.dataset.download_labeled_layers --output data
 python -m utils.dataset.analyze_defect_types --data-dir data
 ```
 
-### 3. 연합학습 실행
+### 3. 데이터 정리 (선택사항)
+
+소수 클래스 및 의미 없는 이름을 가진 결함 유형 데이터를 삭제합니다:
+
+```bash
+# 미리보기 (실제 삭제하지 않음)
+python -m utils.dataset.cleanup_dataset --data-dir data --dry-run
+
+# 실제 정리 실행 (전체 데이터의 1% 미만인 결함 유형 삭제)
+python -m utils.dataset.cleanup_dataset --data-dir data
+```
+
+### 4. 연합학습 실행
 
 **명령줄 인터페이스로 실행 (권장):**
 
@@ -397,7 +409,7 @@ python train_federated.py --data-dir data --backbone resnet50
 python train_federated.py --help
 ```
 
-### 4. 모델 체크포인트 저장
+### 5. 모델 체크포인트 저장
 
 학습 중 모델이 자동으로 저장됩니다:
 
@@ -423,7 +435,7 @@ checkpoints/
     └── checkpoint_metadata.json  # 메타데이터
 ```
 
-### 5. Jupyter Notebook 데모 실행
+### 6. Jupyter Notebook 데모 실행
 
 대화형 데모를 실행하려면:
 
@@ -433,7 +445,7 @@ jupyter notebook demo/federated_learning_demo.ipynb
 
 데모 노트북은 Non-IID 데이터 분배를 포함한 전체 파이프라인을 시연합니다.
 
-### 6. 학습 과정 시각화
+### 7. 학습 과정 시각화
 
 학습이 완료되면 자동으로 시각화 그래프가 생성됩니다:
 
@@ -465,7 +477,7 @@ logs/
 - ✅ Non-IID 분포 시각화 (히트맵)
 - ✅ 클래스별 성능 분석 (Precision, Recall, F1-Score)
 
-### 7. Python 코드로 직접 실행
+### 8. Python 코드로 직접 실행
 
 프로그래밍 방식으로 세밀한 제어가 필요한 경우:
 
