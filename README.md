@@ -28,7 +28,7 @@ python train_federated.py --data-dir data --num-rounds 5 --epochs 2
 ### 기본 실행
 
 ```bash
-# 기본 설정으로 실행 (3개 클라이언트, 3 라운드)
+# 기본 설정으로 실행 (5개 클라이언트, 3 라운드)
 python train_federated.py --data-dir data
 ```
 
@@ -150,8 +150,18 @@ Non-IID 데이터 학습          Non-IID 데이터 학습          Non-IID 데�
 원본 이미지
     ↓
 [AprilGAN] 제로샷 이상 탐지 (학습 불필요)
+    ├─ 이상 영역 검출 (바운딩박스)
+    └─ 이상 영역 마스크/좌표 생성
     ↓
-이상 영역 마스크/좌표 (어디에 이상이 있는지)
+[AprilGAN 평가] (독립 평가, 선택사항)
+    ├─ 검출 결과 vs Ground Truth 비교
+    ├─ Precision, Recall, F1-Score, IoU 계산
+    └─ 제로샷 모델의 성능 측정
+    ↓
+[CNN 학습 데이터 생성]
+    ├─ AprilGAN 검출 영역과 JSON 라벨 매칭
+    ├─ IoU 기반 매칭 (임계값: 0.3)
+    └─ 매칭된 영역만 CNN 학습 데이터로 사용
     ↓
 [CNN] 결함 유형 분류 (연합학습)
     ↓
@@ -159,6 +169,7 @@ Non-IID 데이터 학습          Non-IID 데이터 학습          Non-IID 데�
 ```
 
 - **AprilGAN**: 제로샷 비전 이상탐지 모델 - 추가 학습 없이 바로 사용 가능
+- **AprilGAN 평가**: Ground Truth와 비교하여 제로샷 모델의 성능을 독립적으로 평가 (Precision, Recall, F1-Score, IoU)
 - **CNN**: 결함 유형별 분류 성능 극대화 - 연합학습으로 협력 학습
 
 ### 핵심 원칙
@@ -184,6 +195,21 @@ Non-IID 데이터 학습          Non-IID 데이터 학습          Non-IID 데�
 - 사전 학습된 모델로 추가 학습 불필요
 - 원본 이미지를 그대로 입력받아 이상 영역 마스크와 좌표를 출력
 - **단점**: 이상이 있다는 것은 알 수 있지만, 어떤 종류의 결함인지는 알 수 없음
+
+**AprilGAN 성능 평가**:
+- AprilGAN은 제로샷 모델이므로, Ground Truth(JSON 파일의 바운딩박스)와 비교하여 독립적으로 성능을 평가할 수 있습니다
+- 평가 지표:
+  - **Precision**: AprilGAN이 검출한 영역 중 실제 결함 영역의 비율
+  - **Recall**: 실제 결함 영역 중 AprilGAN이 검출한 비율
+  - **F1-Score**: Precision과 Recall의 조화 평균
+  - **IoU (Intersection over Union)**: 검출 영역과 실제 영역의 겹침 정도
+- 평가 방법:
+  - AprilGAN이 검출한 이상 영역(`anomaly_regions`)과 JSON 파일의 Ground Truth 바운딩박스를 IoU 임계값(기본값: 0.3)으로 매칭
+  - 매칭된 영역은 True Positive, 매칭되지 않은 검출은 False Positive로 계산
+  - Ground Truth에 있지만 검출되지 않은 영역은 False Negative로 계산
+- 현재 구현:
+  - 데이터 로딩 과정에서 AprilGAN 검출 결과와 Ground Truth를 자동으로 매칭 (`utils/bbox_utils.py`의 `match_anomaly_regions` 함수)
+  - 매칭된 영역만 CNN 학습 데이터로 사용되며, 매칭되지 않은 영역(False Positive)은 스킵됩니다
 
 ### CNN 모델
 
@@ -418,7 +444,7 @@ python train_federated.py --data-dir data --backbone resnet50
 | 옵션 | 설명 | 기본값 |
 |------|------|--------|
 | `--data-dir` | 데이터 디렉토리 경로 | `data` |
-| `--num-clients` | 클라이언트 수 | `3` |
+| `--num-clients` | 클라이언트 수 | `5` |
 | `--non-iid-alpha` | Non-IID 정도 (0.1: 매우 편향, 0.5: 보통, 10.0: 균등) | `0.5` |
 | `--num-rounds` | 연합학습 라운드 수 | `3` |
 | `--epochs` | 각 라운드당 로컬 학습 에폭 수 | `1` |
@@ -520,7 +546,7 @@ aprilgan = AprilGAN()
 train_loaders, val_loaders, defect_type_to_idx = load_client_data(
     data_dir=Path("data"),
     aprilgan_model=aprilgan,
-    num_clients=3,
+    num_clients=5,
     non_iid_alpha=0.5,
     train_ratio=0.8,
     batch_size=32
@@ -531,13 +557,13 @@ num_classes = len(defect_type_to_idx)
 cnn_model = create_cnn_model(num_classes=num_classes)
 
 # 4. 서버 시작
-server = FederatedServer(port=5000, num_clients=3, min_clients=2)
+server = FederatedServer(port=5000, num_clients=5, min_clients=2)
 server.set_initial_weights(cnn_model.state_dict())
 server.start()  # 별도 스레드에서 실행
 
 # 5. 클라이언트 생성 및 학습
 clients = []
-for client_id in range(3):
+for client_id in range(5):
     client = FederatedClient(
         client_id=client_id,
         server_url='http://localhost:5000',
