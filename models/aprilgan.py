@@ -1,52 +1,48 @@
 """
 AprilGAN: 제로샷 비전 이상탐지 모델
-사전 학습된 DINOv2 Vision Transformer를 사용한 제로샷 이상 탐지
-추가 학습 없이 바로 이상 영역을 탐지합니다.
+사전 학습된 모델로 추가 학습 없이 이상 영역을 탐지
 """
 
 import numpy as np
 import cv2
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 import torch
 import torch.nn as nn
-from pathlib import Path
-
-try:
-    import timm
-    TIMM_AVAILABLE = True
-except ImportError:
-    TIMM_AVAILABLE = False
-    print("[경고] timm 라이브러리가 설치되지 않았습니다. pip install timm 명령으로 설치하세요.")
 
 
 class AprilGAN:
     """
     AprilGAN 제로샷 이상탐지 모델 래퍼
-    사전 학습된 DINOv2 Vision Transformer를 사용하여 이상 영역을 탐지합니다.
+    
+    실제 AprilGAN 모델이 구현되어 있지 않은 경우를 대비한
+    시뮬레이션/스텁 구현입니다.
+    실제 프로젝트에서는 실제 AprilGAN 모델로 교체해야 합니다.
     """
     
+<<<<<<< HEAD
     def __init__(self, model_path: Optional[str] = None, model_name: str = "dinov2_vits14"):
         """
         Args:
             model_path: 사전 학습된 모델 경로 (None이면 timm에서 자동 다운로드)
             model_name: 사용할 DINOv2 모델 이름 (기본값: dinov2_vits14)
                         옵션: dinov2_vits14 (small), dinov2_vitb14_reg (base), dinov2_vitl14_reg (large)
+=======
+    def __init__(self, model_path: Optional[str] = None):
         """
-        if not TIMM_AVAILABLE:
-            raise RuntimeError("timm 라이브러리가 필요합니다. 'pip install timm' 명령으로 설치하세요.")
-        
+        Args:
+            model_path: 사전 학습된 모델 경로 (None이면 기본 모델 사용)
+>>>>>>> parent of f73de4e (이것저것)
+        """
         self.model_path = model_path
-        self.model_name = model_name
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        self.model = None
-        self.patch_size = 14  # DINOv2의 기본 패치 크기
         self._load_model()
     
     def _load_model(self):
         """
-        사전 학습된 DINOv2 모델 로드
-        모델을 불러올 수 없으면 RuntimeError 발생하여 학습 중단
+        사전 학습된 모델 로드
+        실제 구현에서는 실제 AprilGAN 모델을 로드해야 합니다.
         """
+<<<<<<< HEAD
         try:
             if self.model_path:
                 # 사용자 지정 모델 경로에서 로드
@@ -183,6 +179,14 @@ class AprilGAN:
             raise
         except Exception as e:
             raise RuntimeError(f"AprilGAN 모델 로드 실패: {e}. 학습을 중단합니다.")
+=======
+        # TODO: 실제 AprilGAN 모델 로드
+        # 예시: self.model = load_aprilgan_model(self.model_path)
+        
+        # 현재는 시뮬레이션용 더미 모델
+        print("[AprilGAN] 제로샷 모델 로드 완료 (시뮬레이션 모드)")
+        self.model = None
+>>>>>>> parent of f73de4e (이것저것)
     
     def detect(self, image: np.ndarray) -> Dict:
         """
@@ -200,64 +204,26 @@ class AprilGAN:
             }
         """
         if self.model is None:
-            raise RuntimeError("AprilGAN 모델이 로드되지 않았습니다. 학습을 중단합니다.")
+            # 시뮬레이션 모드: 간단한 이상 탐지 시뮬레이션
+            return self._simulate_detection(image)
         
         # 실제 모델 사용
         return self._real_detection(image)
     
-    # 시뮬레이션 모드 제거 - 주석 처리
-    # def _simulate_detection(self, image: np.ndarray) -> Dict:
-    #     """
-    #     시뮬레이션용 이상 탐지
-    #     실제 프로젝트에서는 이 부분을 실제 AprilGAN 모델로 교체해야 합니다.
-    #     """
-    #     ...
-    
-    def _real_detection(self, image: np.ndarray) -> Dict:
+    def _simulate_detection(self, image: np.ndarray) -> Dict:
         """
-        DINOv2 모델을 사용한 제로샷 이상 탐지
-        특징 공간에서의 거리를 기반으로 이상 점수 계산
+        시뮬레이션용 이상 탐지
+        실제 프로젝트에서는 이 부분을 실제 AprilGAN 모델로 교체해야 합니다.
         """
-        # 이미지 전처리
-        preprocessed = self._preprocess(image)
+        h, w = image.shape[:2]
         
-        # DINOv2로 특징 추출
-        with torch.no_grad():
-            # DINOv2의 패치별 특징 추출
-            features = self.model.forward_features(preprocessed)
-            
-            # CLS 토큰 제외하고 패치 특징만 사용
-            if isinstance(features, dict):
-                # timm의 forward_features는 dict를 반환할 수 있음
-                patch_features = features.get('x_norm_clstoken', features.get('x', None))
-                if patch_features is None:
-                    # 다른 키 시도
-                    patch_features = list(features.values())[0]
-            else:
-                patch_features = features
-            
-            # 패치 특징에서 CLS 토큰 제거 (첫 번째 토큰)
-            if len(patch_features.shape) == 3:  # (B, N+1, D) -> (B, N, D)
-                patch_features = patch_features[:, 1:, :]
-            
-            # 특징 정규화
-            patch_features = torch.nn.functional.normalize(patch_features, p=2, dim=-1)
-            
-            # 이상 점수 계산: 각 패치 특징의 평균 거리
-            # 정상 패치들은 특징 공간에서 밀집되어 있고, 이상 패치는 멀리 떨어져 있음
-            mean_features = patch_features.mean(dim=1, keepdim=True)  # (B, 1, D)
-            distances = torch.cdist(patch_features, mean_features, p=2).squeeze(-1)  # (B, N)
-            
-            # 이상 점수 맵 생성
-            anomaly_scores = distances.squeeze(0).cpu().numpy()  # (N,)
+        # 간단한 시뮬레이션: 이미지의 일부 영역을 이상으로 표시
+        # 실제로는 AprilGAN 모델이 정교한 이상 탐지를 수행합니다
         
-        # 후처리: 이상 점수를 이미지 크기로 변환하고 이상 영역 추출
-        return self._postprocess(anomaly_scores, image.shape[:2])
-    
-    def _postprocess(self, anomaly_scores: np.ndarray, image_shape: Tuple[int, int]) -> Dict:
-        """
-        패치별 이상 점수를 이미지 크기로 변환하여 이상 영역 추출
+        # 예시: 이미지의 밝기나 텍스처 변화를 기반으로 이상 탐지 시뮬레이션
+        gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
         
+<<<<<<< HEAD
         Args:
             anomaly_scores: 패치별 이상 점수 배열 (N,)
             image_shape: 원본 이미지 크기 (height, width)
@@ -295,6 +261,14 @@ class AprilGAN:
         # 이상 마스크 생성 (임계값 기반)
         threshold = np.percentile(anomaly_map_resized, 90)  # 상위 10%를 이상으로 판단
         anomaly_mask = (anomaly_map_resized > threshold).astype(np.uint8)
+=======
+        # 간단한 이상 탐지 시뮬레이션 (실제로는 복잡한 딥러닝 모델)
+        # 여기서는 예시로 밝기 변화가 큰 영역을 이상으로 표시
+        blur = cv2.GaussianBlur(gray, (15, 15), 0)
+        diff = np.abs(gray.astype(float) - blur.astype(float))
+        threshold = np.percentile(diff, 90)
+        anomaly_mask = (diff > threshold).astype(np.uint8)
+>>>>>>> parent of f73de4e (이것저것)
         
         # 연결된 컴포넌트 찾기
         num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(
@@ -306,18 +280,18 @@ class AprilGAN:
         for i in range(1, num_labels):  # 0은 배경
             x = stats[i, cv2.CC_STAT_LEFT]
             y = stats[i, cv2.CC_STAT_TOP]
-            w_box = stats[i, cv2.CC_STAT_WIDTH]
-            h_box = stats[i, cv2.CC_STAT_HEIGHT]
+            w = stats[i, cv2.CC_STAT_WIDTH]
+            h = stats[i, cv2.CC_STAT_HEIGHT]
             
             # 최소 크기 필터링
-            if w_box * h_box < 100:  # 너무 작은 영역 제외
+            if w * h < 100:  # 너무 작은 영역 제외
                 continue
             
             anomaly_regions.append({
                 'x1': x,
                 'y1': y,
-                'x2': x + w_box,
-                'y2': y + h_box
+                'x2': x + w,
+                'y2': y + h
             })
         
         # 이상 점수 계산
@@ -327,10 +301,25 @@ class AprilGAN:
             'anomaly_mask': anomaly_mask,
             'anomaly_regions': anomaly_regions,
             'anomaly_score': float(anomaly_score),
-            'confidence_map': anomaly_map_resized / (anomaly_map_resized.max() + 1e-8)  # 정규화
+            'confidence_map': diff / (diff.max() + 1e-8)  # 정규화
         }
     
+    def _real_detection(self, image: np.ndarray) -> Dict:
+        """
+        실제 AprilGAN 모델을 사용한 이상 탐지
+        실제 구현에서는 이 메서드를 사용합니다.
+        """
+        # TODO: 실제 AprilGAN 모델 추론 코드
+        # 예시:
+        # preprocessed = self._preprocess(image)
+        # with torch.no_grad():
+        #     result = self.model(preprocessed)
+        # return self._postprocess(result)
+        
+        raise NotImplementedError("실제 AprilGAN 모델 구현 필요")
+    
     def _preprocess(self, image: np.ndarray) -> torch.Tensor:
+<<<<<<< HEAD
         """
         이미지 전처리 (DINOv2 입력 형식에 맞춤)
         모델의 입력 크기에 맞게 동적으로 리사이즈
@@ -346,13 +335,12 @@ class AprilGAN:
         image_resized = cv2.resize(image_rgb, (input_size, input_size))
         
         # [0, 255] -> [0, 1]로 정규화
+=======
+        """이미지 전처리"""
+        # 리사이즈, 정규화 등
+        image_resized = cv2.resize(image, (512, 512))
+>>>>>>> parent of f73de4e (이것저것)
         image_tensor = torch.from_numpy(image_resized).permute(2, 0, 1).float() / 255.0
-        
-        # ImageNet 평균/표준편차로 정규화 (DINOv2는 ImageNet으로 학습됨)
-        mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
-        std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
-        image_tensor = (image_tensor - mean) / std
-        
         return image_tensor.unsqueeze(0).to(self.device)
     
     def __call__(self, image: np.ndarray) -> Dict:
