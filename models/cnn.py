@@ -1,6 +1,6 @@
 """
 CNN: 결함 유형 분류 모델
-AprilGAN이 찾은 이상 영역을 입력으로 받아 결함 유형을 분류
+JSON 파일의 TagBoxes에서 추출한 결함 영역을 입력으로 받아 결함 유형을 분류
 """
 
 import torch

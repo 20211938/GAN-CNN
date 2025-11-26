@@ -75,7 +75,6 @@ def get_optimal_batch_size(
 
 def load_client_data(
     data_dir: Path,
-    aprilgan_model,
     num_clients: int = 3,
     train_ratio: float = 0.8,
     val_ratio: float = 0.2,
@@ -85,15 +84,18 @@ def load_client_data(
     non_iid_alpha: float = 0.5,
     num_workers: Optional[int] = None,
     auto_batch_size: bool = True,
-    verbose: bool = True
+    verbose: bool = True,
+    clip_model: Optional[object] = None,
+    use_clip: bool = False
 ) -> Tuple[List[DataLoader], List[DataLoader], Optional[DataLoader], Dict[str, int]]:
     """
     클라이언트별 Non-IID 데이터를 로드하고 DataLoader 생성
     
     Args:
         data_dir: 데이터 디렉토리 경로
-        aprilgan_model: AprilGAN 모델
         num_clients: 클라이언트 수
+        clip_model: CLIP 모델 (use_clip=True일 때 사용)
+        use_clip: CLIP 모델 사용 여부 (False면 JSON TagBoxes 직접 사용)
         train_ratio: 학습 데이터 비율 (train 데이터 중에서, 기본값: 0.8)
         val_ratio: 검증 데이터 비율 (train 데이터 중에서, 기본값: 0.2)
         test_ratio: 테스트 데이터 비율 (전체 데이터 중에서, 기본값: 0.1)
@@ -269,17 +271,19 @@ def load_client_data(
         train_dataset = DefectDataset(
             train_images,
             train_jsons,
-            aprilgan_model,
             defect_type_to_idx,
-            patch_size
+            patch_size,
+            clip_model=clip_model,
+            use_clip=use_clip
         )
         
         val_dataset = DefectDataset(
             val_images,
             val_jsons,
-            aprilgan_model,
             defect_type_to_idx,
-            patch_size
+            patch_size,
+            clip_model=clip_model,
+            use_clip=use_clip
         )
         
         # DataLoader 생성
@@ -314,9 +318,10 @@ def load_client_data(
         test_dataset = DefectDataset(
             test_images_all,
             test_jsons_all,
-            aprilgan_model,
             defect_type_to_idx,
-            patch_size
+            patch_size,
+            clip_model=clip_model,
+            use_clip=use_clip
         )
         
         test_loader = DataLoader(

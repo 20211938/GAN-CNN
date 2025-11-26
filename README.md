@@ -2,12 +2,12 @@
 
 ## 📋 프로젝트 개요
 
-금속 3D 프린팅 공정 중 발생하는 결함을 **AprilGAN + CNN** 구조를 활용하여 검출하고 분류하는 프로젝트입니다.
+금속 3D 프린팅 공정 중 발생하는 결함을 **CNN** 모델을 활용하여 분류하는 프로젝트입니다.
 **전체 시스템은 연합학습(Federated Learning) 프레임워크 내에서 동작**하며, 기업 간 데이터 공유 없이 모델 성능을 향상시킵니다.
 
 ### 주요 특징
 
-- ✅ **제로샷 이상 탐지**: AprilGAN을 통한 추가 학습 없는 결함 검출
+- ✅ **결함 분류**: JSON 파일의 TagBoxes에서 직접 결함 영역을 추출하여 CNN으로 분류
 - ✅ **연합학습**: 여러 기업이 가중치만 공유하여 협력 학습
 - ✅ **Non-IID 지원**: 각 클라이언트가 서로 다른 결함 유형 분포를 가지는 현실적 환경 시뮬레이션
 - ✅ **데이터 프라이버시**: 원본 데이터는 절대 공유하지 않고 가중치만 전송
@@ -113,15 +113,14 @@ python train_federated.py --help
 
 ## 🎯 프로젝트 목표
 
-- **결함 검출**: AprilGAN을 통한 제로샷 이상 탐지 및 결함 위치 검출
-- **결함 분류**: CNN을 통한 결함 유형별 분류
+- **결함 분류**: JSON 파일의 TagBoxes에서 직접 결함 영역을 추출하여 CNN으로 결함 유형별 분류
 - **제한된 데이터 환경**: 데이터 부족 상황에서의 성능 개선 및 실용성 확보
 - **연합학습**: 기업 간 데이터 공유 없이 협력 학습
 - **Non-IID 환경**: 서로 다른 데이터 분포를 가진 클라이언트 간 협력 학습
 
 ## 🏗️ 시스템 아키텍처
 
-### 연합학습 기반 AprilGAN + CNN 파이프라인
+### 연합학습 기반 CNN 파이프라인
 
 ```
 [클라이언트 1]                    [클라이언트 2]                    [클라이언트 N]
@@ -144,32 +143,26 @@ Non-IID 데이터 학습          Non-IID 데이터 학습          Non-IID 데�
 - 실제 산업 환경을 정확히 반영
 - Federated Averaging을 통해 모든 클라이언트의 지식을 통합
 
-### AprilGAN + CNN 파이프라인
+### CNN 파이프라인
 
 ```
-원본 이미지
+원본 이미지 (JPG) + JSON 파일 (TagBoxes)
     ↓
-[AprilGAN] 제로샷 이상 탐지 (학습 불필요)
-    ├─ 이상 영역 검출 (바운딩박스)
-    └─ 이상 영역 마스크/좌표 생성
-    ↓
-[AprilGAN 평가] (독립 평가, 선택사항)
-    ├─ 검출 결과 vs Ground Truth 비교
-    ├─ Precision, Recall, F1-Score, IoU 계산
-    └─ 제로샷 모델의 성능 측정
+[JSON TagBoxes에서 결함 영역 직접 추출]
+    ├─ DepositionImageModel.TagBoxes
+    ├─ ScanningImageModel.TagBoxes
+    └─ 바운딩박스와 결함 유형 추출
     ↓
 [CNN 학습 데이터 생성]
-    ├─ AprilGAN 검출 영역과 JSON 라벨 매칭
-    ├─ IoU 기반 매칭 (임계값: 0.3)
-    └─ 매칭된 영역만 CNN 학습 데이터로 사용
+    ├─ JSON TagBoxes의 각 결함 영역을 패치로 추출
+    └─ 결함 유형 라벨과 함께 CNN 학습 데이터로 사용
     ↓
 [CNN] 결함 유형 분류 (연합학습)
     ↓
 결함 유형 ("Super Elevation", "Crack", etc.)
 ```
 
-- **AprilGAN**: 제로샷 비전 이상탐지 모델 - 추가 학습 없이 바로 사용 가능
-- **AprilGAN 평가**: Ground Truth와 비교하여 제로샷 모델의 성능을 독립적으로 평가 (Precision, Recall, F1-Score, IoU)
+- **JSON TagBoxes**: 수동 라벨링된 결함 영역을 직접 사용
 - **CNN**: 결함 유형별 분류 성능 극대화 - 연합학습으로 협력 학습
 
 ### 핵심 원칙
@@ -182,46 +175,17 @@ Non-IID 데이터 학습          Non-IID 데이터 학습          Non-IID 데�
 
 ## 🔍 모델 설명
 
-### AprilGAN 모델
-
-**역할**: 제로샷 비전 이상탐지 모델로, 이미지에서 이상 영역을 자동으로 찾아냅니다.
-
-**왜 사용했나요?**
-- 금속 3D 프린팅 결함 데이터가 부족한 상황에서, **추가 학습 없이 바로 사용**할 수 있는 제로샷 모델이 필요했습니다
-- 복잡한 전처리나 데이터 라벨링 없이도 이상 영역을 자동으로 탐지할 수 있습니다
-- 모든 클라이언트에서 동일한 모델을 사용하므로 연합학습이 필요 없습니다
-
-**특징**:
-- 사전 학습된 모델로 추가 학습 불필요
-- 원본 이미지를 그대로 입력받아 이상 영역 마스크와 좌표를 출력
-- **단점**: 이상이 있다는 것은 알 수 있지만, 어떤 종류의 결함인지는 알 수 없음
-
-**AprilGAN 성능 평가**:
-- AprilGAN은 제로샷 모델이므로, Ground Truth(JSON 파일의 바운딩박스)와 비교하여 독립적으로 성능을 평가할 수 있습니다
-- 평가 지표:
-  - **Precision**: AprilGAN이 검출한 영역 중 실제 결함 영역의 비율
-  - **Recall**: 실제 결함 영역 중 AprilGAN이 검출한 비율
-  - **F1-Score**: Precision과 Recall의 조화 평균
-  - **IoU (Intersection over Union)**: 검출 영역과 실제 영역의 겹침 정도
-- 평가 방법:
-  - AprilGAN이 검출한 이상 영역(`anomaly_regions`)과 JSON 파일의 Ground Truth 바운딩박스를 IoU 임계값(기본값: 0.3)으로 매칭
-  - 매칭된 영역은 True Positive, 매칭되지 않은 검출은 False Positive로 계산
-  - Ground Truth에 있지만 검출되지 않은 영역은 False Negative로 계산
-- 현재 구현:
-  - 데이터 로딩 과정에서 AprilGAN 검출 결과와 Ground Truth를 자동으로 매칭 (`utils/bbox_utils.py`의 `match_anomaly_regions` 함수)
-  - 매칭된 영역만 CNN 학습 데이터로 사용되며, 매칭되지 않은 영역(False Positive)은 스킵됩니다
-
 ### CNN 모델
 
-**역할**: AprilGAN이 찾은 이상 영역이 어떤 결함 유형인지 분류합니다.
+**역할**: JSON 파일의 TagBoxes에서 추출한 결함 영역이 어떤 결함 유형인지 분류합니다.
 
 **왜 사용했나요?**
-- AprilGAN은 이상 유무만 알려주므로, **구체적인 결함 유형을 분류**하는 모델이 필요했습니다
+- 금속 3D 프린팅 결함 데이터의 **구체적인 결함 유형을 분류**하는 모델이 필요했습니다
 - ResNet 기반의 CNN은 이미지 분류에 효과적이며, 연합학습으로 여러 기업의 데이터를 활용할 수 있습니다
-- AprilGAN이 이미 이상 영역을 찾아주므로, CNN은 순수하게 분류 작업만 수행하면 됩니다
+- JSON 파일의 TagBoxes에서 직접 결함 영역을 추출하므로, 추가적인 이상 탐지 모델 없이도 분류 작업을 수행할 수 있습니다
 
 **특징**:
-- AprilGAN이 찾은 이상 영역 패치를 입력으로 받아 결함 유형 분류
+- JSON 파일의 TagBoxes에서 직접 결함 영역 패치를 추출하여 결함 유형 분류
 - 연합학습을 통해 여러 클라이언트의 지식을 통합 학습
 - 가중치만 서버로 전송하여 데이터 프라이버시 보장
 - ResNet18/34/50 백본 지원
@@ -249,9 +213,9 @@ AprilGAN과 CNN은 순차적 파이프라인 구조이므로, **CNN만 연합학
 
 **클라이언트 측 프로세스:**
 1. 서버로부터 최신 CNN 가중치 수신
-2. 로컬 이미지에 AprilGAN 적용 (제로샷, 학습 없음)
-3. AprilGAN이 찾은 이상 영역 추출
-4. **Non-IID 데이터**로 CNN 분류 모델 학습
+2. 로컬 JSON 파일의 TagBoxes에서 결함 영역 직접 추출
+3. 추출한 결함 영역 패치로 **Non-IID 데이터** 구성
+4. CNN 분류 모델 학습
 5. CNN 가중치만 서버로 전송
 
 **서버 측 프로세스:**
@@ -268,9 +232,9 @@ AprilGAN과 CNN은 순차적 파이프라인 구조이므로, **CNN만 연합학
 
 **장점:**
 - 통신 효율성: CNN 가중치만 전송
-- 모델 동기화: 모든 클라이언트가 동일한 AprilGAN 사용
 - 구현 단순성: 하나의 연합학습 라운드로 관리
 - 현실성: Non-IID 환경을 정확히 반영
+- 데이터 활용: JSON 파일의 수동 라벨링 데이터를 직접 활용
 
 ### 연합학습 라운드
 
@@ -286,8 +250,8 @@ AprilGAN과 CNN은 순차적 파이프라인 구조이므로, **CNN만 연합학
 ### 데이터 형식
 
 - 금속 3D 프린팅 공정 결함 이미지 (JPG)
-- JSON 파일에 바운딩박스 형태로 결함 정보 저장
-- 결함 유형별 샘플 불균형 문제 해결을 위한 AprilGAN 기반 증강
+- JSON 파일에 바운딩박스 형태로 결함 정보 저장 (TagBoxes)
+- JSON 파일의 TagBoxes에서 직접 결함 영역을 추출하여 CNN 학습 데이터로 사용
 
 ### Non-IID 데이터 분배
 
@@ -317,7 +281,6 @@ AprilGAN과 CNN은 순차적 파이프라인 구조이므로, **CNN만 연합학
 GAN-CNN/
 ├── train_federated.py   # 연합학습 실행 스크립트 (메인)
 ├── models/              # 모델 구현
-│   ├── aprilgan.py      # AprilGAN 제로샷 모델 래퍼
 │   ├── cnn.py           # CNN 결함 분류 모델
 │   └── few_shot_cnn.py  # 퓨샷 학습 CNN 모델
 ├── federated/           # 연합학습 프레임워크
@@ -361,16 +324,10 @@ GAN-CNN/
    - `analyze_defect_types.py`: 결함 유형 분석 및 통계 생성
    - `cleanup_dataset.py`: 소수 클래스 및 의미 없는 결함 유형 제거
 
-3. **AprilGAN** (`models/aprilgan.py`)
-   - 제로샷 이상 탐지 모델 래퍼
-   - 사전 학습된 모델로 추가 학습 불필요
-   - 모든 클라이언트에서 동일한 모델 사용
-   - 이상 영역을 자동으로 검출
-
-4. **CNN** (`models/`)
+3. **CNN** (`models/`)
    - `cnn.py`: ResNet 기반 결함 분류 모델
    - `few_shot_cnn.py`: 퓨샷 학습 지원 CNN 모델
-   - AprilGAN이 찾은 이상 영역을 입력으로 받아 분류
+   - JSON 파일의 TagBoxes에서 추출한 결함 영역을 입력으로 받아 분류
    - 로컬 데이터로 학습 → 가중치만 서버로 전송
 
 5. **연합 학습** (`federated/`)
@@ -533,35 +490,30 @@ logs/
 
 ```python
 from pathlib import Path
-from models.aprilgan import AprilGAN
 from models.cnn import create_cnn_model
 from federated.server import FederatedServer
 from federated.client import FederatedClient
 from utils.client_data_loader import load_client_data
 
-# 1. AprilGAN 초기화
-aprilgan = AprilGAN()
-
-# 2. Non-IID 데이터 로드
+# 1. Non-IID 데이터 로드 (JSON TagBoxes에서 직접 추출)
 train_loaders, val_loaders, defect_type_to_idx = load_client_data(
     data_dir=Path("data"),
-    aprilgan_model=aprilgan,
     num_clients=5,
     non_iid_alpha=0.5,
     train_ratio=0.8,
     batch_size=32
 )
 
-# 3. 모델 생성
+# 2. 모델 생성
 num_classes = len(defect_type_to_idx)
 cnn_model = create_cnn_model(num_classes=num_classes)
 
-# 4. 서버 시작
+# 3. 서버 시작
 server = FederatedServer(port=5000, num_clients=5, min_clients=2)
 server.set_initial_weights(cnn_model.state_dict())
 server.start()  # 별도 스레드에서 실행
 
-# 5. 클라이언트 생성 및 학습
+# 4. 클라이언트 생성 및 학습
 clients = []
 for client_id in range(5):
     client = FederatedClient(
@@ -571,7 +523,7 @@ for client_id in range(5):
     )
     clients.append(client)
 
-# 6. 연합학습 라운드 실행
+# 5. 연합학습 라운드 실행
 for round_num in range(3):
     # 가중치 수신
     for client in clients:
@@ -589,12 +541,11 @@ for round_num in range(3):
 
 ## 📈 기대 효과
 
-- **데이터 확장**: GAN 기반 합성 데이터로 훈련 세트 대폭 확장
 - **성능 개선**: CNN 분류 모델의 정확도 향상
-- **불균형 해소**: 결함 유형별 데이터 불균형 문제 완화
 - **프라이버시 보장**: 기업 간 데이터 공유 없이 협력 학습
 - **Non-IID 환경 대응**: 서로 다른 데이터 분포를 가진 클라이언트 간 협력 학습
 - **현실적 시뮬레이션**: 실제 산업 환경을 반영한 연합학습 검증
+- **데이터 활용**: JSON 파일의 수동 라벨링 데이터를 직접 활용하여 정확한 학습
 
 ## 🔒 보안 및 프라이버시
 
@@ -611,11 +562,10 @@ for round_num in range(3):
 프라이버시 중심 학습 전략을 기반으로 합니다.
 
 **핵심 원칙:**
-- **GAN은 클라이언트 내부(Local)에서만 학습**하여 민감 데이터가 외부로 유출되지 않습니다
-- **GAN이 생성한 합성 데이터 또한 공유되지 않으며**, 오직 로컬 학습에만 사용됩니다
 - **CNN 분류 모델은 Federated Learning(FedAvg) 방식으로 통합 학습**됩니다
 - 중앙 서버는 **이미지가 아닌, 모델의 가중치 변화(ΔW)만 수신**합니다
 - 모든 클라이언트의 **원본 데이터는 절대 서버로 전달되지 않습니다**
+- JSON 파일의 TagBoxes 데이터는 로컬에서만 사용되며 서버로 전송되지 않습니다
 
 ## 📝 참고문헌
 

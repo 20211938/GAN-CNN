@@ -63,3 +63,5 @@ data/
 # 로그 파일
 *.log
 logs/
+
+visualized_bboxes/

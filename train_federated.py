@@ -9,8 +9,8 @@ import torch
 from pathlib import Path
 from threading import Thread
 
-from models.aprilgan import AprilGAN
 from models.cnn import create_cnn_model
+from models.clip_defect_detector import CLIPDefectDetector
 from federated.server import FederatedServer
 from federated.client import FederatedClient
 from utils.client_data_loader import load_client_data
@@ -141,6 +141,17 @@ def main():
         default=None,
         help='사용할 디바이스 (기본값: 자동 감지)'
     )
+    parser.add_argument(
+        '--use-clip',
+        action='store_true',
+        help='CLIP 모델을 사용하여 결함 영역 검출 (기본값: False, JSON TagBoxes 직접 사용)'
+    )
+    parser.add_argument(
+        '--clip-model',
+        type=str,
+        default='ViT-B/32',
+        help='CLIP 모델 이름 (기본값: ViT-B/32)'
+    )
     
     # 로깅 옵션
     parser.add_argument(
@@ -211,6 +222,9 @@ def main():
     print(f"  ├─ 백본 모델: {args.backbone}")
     print(f"  ├─ 디바이스: {args.device}")
     print(f"  ├─ 퓨샷 학습: {'사용' if args.use_few_shot else '미사용'}")
+    print(f"  ├─ CLIP 모델: {'사용' if args.use_clip else '미사용'}")
+    if args.use_clip:
+        print(f"  │  └─ 모델 이름: {args.clip_model}")
     print(f"  ├─ 로그 저장: {'비활성화' if args.no_log else f'{args.log_dir}'}")
     print(f"  └─ 체크포인트: {'비활성화' if not args.save_checkpoints else f'{args.checkpoint_dir}'}")
     print(f"{'='*70}\n")
@@ -267,22 +281,37 @@ def main():
             traceback.print_exc()
             checkpoint_manager = None
     
-    # 1. AprilGAN 모델 초기화
-    print("[1단계] AprilGAN 모델 초기화 중...")
-    aprilgan = AprilGAN()
-    print("  └─ 완료!\n")
+    # 0. CLIP 모델 초기화 (필요한 경우)
+    clip_model = None
+    if args.use_clip:
+        print("[0단계] CLIP 모델 초기화 중...")
+        try:
+            device = torch.device(args.device)
+            clip_model = CLIPDefectDetector(
+                model_name=args.clip_model,
+                device=device
+            )
+            print("[0단계] ✅ CLIP 모델 초기화 완료\n")
+        except Exception as e:
+            print(f"[0단계] ⚠️  CLIP 모델 초기화 실패: {e}")
+            print("  💡 JSON TagBoxes를 직접 사용합니다.")
+            import traceback
+            traceback.print_exc()
+            clip_model = None
+            args.use_clip = False
     
-    # 2. 데이터 로드
-    print("[2단계] Non-IID 데이터 로드 중...")
+    # 1. 데이터 로드
+    print("[1단계] Non-IID 데이터 로드 중...")
     try:
         train_loaders, val_loaders, test_loader, defect_type_to_idx = load_client_data(
             data_dir=args.data_dir,
-            aprilgan_model=aprilgan,
             num_clients=args.num_clients,
             train_ratio=args.train_ratio,
             batch_size=args.batch_size,
             patch_size=(224, 224),
             non_iid_alpha=args.non_iid_alpha,
+            clip_model=clip_model,
+            use_clip=args.use_clip,
             num_workers=args.num_workers,
             auto_batch_size=args.auto_batch_size,
             verbose=True
@@ -362,8 +391,8 @@ def main():
         print("  💡 데이터 디렉토리를 확인하거나 --data-dir 옵션을 확인하세요.")
         return
     
-    # 3. CNN 모델 생성
-    print(f"\n[3단계] CNN 모델 생성 중...")
+    # 2. CNN 모델 생성
+    print(f"\n[2단계] CNN 모델 생성 중...")
     cnn_model = create_cnn_model(
         num_classes=num_classes,
         backbone=args.backbone,
@@ -387,8 +416,8 @@ def main():
             print("  💡 처음부터 학습을 시작합니다.")
             start_round = 0
     
-    # 4. 서버 시작
-    print(f"[4단계] 연합학습 서버 시작 중...")
+    # 3. 서버 시작
+    print(f"[3단계] 연합학습 서버 시작 중...")
     server = FederatedServer(
         port=args.server_port,
         num_clients=args.num_clients,
@@ -407,8 +436,8 @@ def main():
     time.sleep(2)
     print(f"  └─ 서버 시작 완료! (포트: {args.server_port})\n")
     
-    # 5. 클라이언트 생성
-    print(f"[5단계] 클라이언트 생성 중...")
+    # 4. 클라이언트 생성
+    print(f"[4단계] 클라이언트 생성 중...")
     clients = []
     server_url = f'http://localhost:{args.server_port}'
     
@@ -423,8 +452,8 @@ def main():
         print(f"  ├─ 클라이언트 {client_id} 생성 완료")
     print(f"  └─ 총 {len(clients)}개 클라이언트 생성 완료\n")
     
-    # 6. 연합학습 라운드 실행
-    print(f"[6단계] 연합학습 라운드 실행")
+    # 5. 연합학습 라운드 실행
+    print(f"[5단계] 연합학습 라운드 실행")
     print(f"{'='*70}\n")
     
     for round_num in range(start_round, args.num_rounds):
@@ -529,9 +558,9 @@ def main():
         print(f"\n라운드 {round_num + 1} 완료!")
         print(f"{'='*70}\n")
     
-    # 7. 최종 평가 (테스트 데이터셋 사용)
+    # 6. 최종 평가 (테스트 데이터셋 사용)
     print(f"\n{'='*70}")
-    print(f"[7단계] 최종 모델 평가 (테스트 데이터셋)")
+    print(f"[6단계] 최종 모델 평가 (테스트 데이터셋)")
     print(f"{'='*70}\n")
     
     # 최종 가중치로 모델 업데이트
