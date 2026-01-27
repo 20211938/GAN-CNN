@@ -11,43 +11,49 @@ from torch.utils.data import Dataset, DataLoader
 import torch
 from torchvision import transforms
 
-from .bbox_utils import extract_bboxes_from_json
+from .bbox_utils import extract_bboxes_from_json, match_anomaly_regions
 from .non_iid_distribution import distribute_non_iid, analyze_client_distribution
 
 
 class DefectDataset(Dataset):
     """
     결함 데이터셋 클래스
-    AprilGAN이 찾은 이상 영역과 CNN 레이블을 제공
+    CLIP 모델을 사용하여 결함 영역을 검출하거나 JSON TagBoxes에서 직접 추출하여 CNN 학습 데이터 제공
     """
     
     def __init__(
         self,
         image_paths: List[Path],
         json_paths: List[Path],
-        aprilgan_model,
         defect_type_to_idx: Dict[str, int],
         patch_size: Tuple[int, int] = (224, 224),
-        transform: Optional[transforms.Compose] = None
+        transform: Optional[transforms.Compose] = None,
+        clip_model: Optional[object] = None,
+        use_clip: bool = False
     ):
         """
         Args:
             image_paths: 이미지 파일 경로 리스트
             json_paths: JSON 파일 경로 리스트
-            aprilgan_model: AprilGAN 모델 (제로샷)
             defect_type_to_idx: 결함 유형을 인덱스로 매핑하는 딕셔너리
             patch_size: CNN 입력 크기
             transform: 이미지 변환 (augmentation)
+            clip_model: CLIP 모델 (use_clip=True일 때 사용)
+            use_clip: CLIP 모델 사용 여부 (False면 JSON TagBoxes 직접 사용)
         """
         self.image_paths = image_paths
         self.json_paths = json_paths
-        self.aprilgan_model = aprilgan_model
         self.defect_type_to_idx = defect_type_to_idx
         self.patch_size = patch_size
         self.transform = transform or self._default_transform()
+        self.clip_model = clip_model
+        self.use_clip = use_clip
         
-        # 데이터 샘플 생성 (AprilGAN으로 이상 영역 찾기)
-        self.samples = self._prepare_samples()
+        # 데이터 샘플 생성
+        if use_clip and clip_model is not None:
+            self.samples = self._prepare_samples_with_clip()
+        else:
+            self.samples = self._prepare_samples()
     
     def _default_transform(self):
         """기본 이미지 변환"""
@@ -58,29 +64,20 @@ class DefectDataset(Dataset):
     
     def _prepare_samples(self) -> List[Dict]:
         """
-        AprilGAN으로 이상 영역을 찾고 JSON 라벨과 매칭하여 CNN 학습 샘플 생성
-        AprilGAN 검출 결과를 직접 사용하고, 각 영역에 대해 JSON의 라벨을 매칭
-        
-        - IoU >= 0.3: JSON의 실제 결함 유형 라벨 사용
-        - IoU < 0.3 또는 매칭 실패: 'False Positive' 라벨 부여
-        - 모든 AprilGAN 검출 결과를 포함하여 실제 배포 시나리오 반영
+        JSON 파일의 TagBoxes에서 직접 결함 영역을 추출하여 샘플 생성
         """
-        print(f"\n[데이터 준비] AprilGAN으로 이상 영역 검출 및 CNN 학습 데이터 생성 중...")
+        print(f"\n[데이터 준비] JSON TagBoxes에서 결함 영역 추출 중...")
         print(f"  ├─ 총 이미지 수: {len(self.image_paths)}개")
         
         samples = []
         processed_images = 0
-        total_detections = 0  # AprilGAN이 검출한 총 영역 수
-        labeled_samples = 0  # JSON 라벨과 매칭된 샘플 수 (실제 결함)
-        unlabeled_samples = 0  # False Positive 샘플 수 (AprilGAN 오검출)
+        total_regions = 0
         
         from tqdm import tqdm
-        from .bbox_utils import normalize_defect_type, calculate_iou
-        
         pbar = tqdm(
             zip(self.image_paths, self.json_paths),
             total=len(self.image_paths),
-            desc="이상 영역 검출 및 라벨링",
+            desc="결함 영역 추출",
             unit="image",
             ncols=100
         )
@@ -93,43 +90,21 @@ class DefectDataset(Dataset):
             
             image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
             
-            # AprilGAN으로 이상 영역 검출 (제로샷 모델)
-            anomaly_result = self.aprilgan_model.detect(image_rgb)
-            detected_regions = anomaly_result.get('anomaly_regions', [])
-            total_detections += len(detected_regions)
-            
-            # JSON에서 Ground Truth 라벨 추출
+            # JSON에서 결함 영역과 레이블 직접 추출
             gt_bboxes, gt_types = extract_bboxes_from_json(json_path)
+            total_regions += len(gt_bboxes)
             
-            # 각 AprilGAN 검출 영역에 대해 JSON 라벨 매칭
-            for det_region in detected_regions:
-                # 가장 높은 IoU를 가진 Ground Truth 찾기
-                best_iou = 0.0
-                best_label = None
-                
-                for gt_bbox, gt_type in zip(gt_bboxes, gt_types):
-                    iou = calculate_iou(det_region, gt_bbox)
-                    if iou > best_iou:
-                        best_iou = iou
-                        best_label = gt_type
-                
-                # IoU 임계값 이상이면 JSON 라벨 사용, 아니면 'False Positive' 라벨 부여
-                iou_threshold = 0.3  # CNN 학습을 위한 매칭 임계값
-                if best_iou >= iou_threshold and best_label:
-                    # 매칭 성공: JSON의 실제 결함 유형 사용
-                    defect_type = normalize_defect_type(best_label)
-                    labeled_samples += 1
-                else:
-                    # 매칭 실패: 'False Positive' 라벨 부여 (AprilGAN이 잘못 검출한 경우)
-                    # 실제 배포 시나리오를 반영하여 모든 검출 결과를 포함
-                    defect_type = 'False Positive'
-                    unlabeled_samples += 1
+            # 각 결함 영역을 샘플로 추가
+            for bbox, defect_type in zip(gt_bboxes, gt_types):
+                # 결함 유형 정규화
+                from .bbox_utils import normalize_defect_type
+                normalized_defect_type = normalize_defect_type(defect_type)
                 
                 # 영역 추출
-                x1 = max(0, det_region['x1'])
-                y1 = max(0, det_region['y1'])
-                x2 = min(image_rgb.shape[1], det_region['x2'])
-                y2 = min(image_rgb.shape[0], det_region['y2'])
+                x1 = max(0, bbox['x1'])
+                y1 = max(0, bbox['y1'])
+                x2 = min(image_rgb.shape[1], bbox['x2'])
+                y2 = min(image_rgb.shape[0], bbox['y2'])
                 
                 patch = image_rgb[y1:y2, x1:x2]
                 
@@ -138,16 +113,14 @@ class DefectDataset(Dataset):
                 
                 samples.append({
                     'patch': patch,
-                    'label': defect_type,
-                    'bbox': det_region,
+                    'label': normalized_defect_type,
+                    'bbox': bbox,
                     'image_path': str(img_path)
                 })
             
             processed_images += 1
             pbar.set_postfix({
                 '처리': f'{processed_images}/{len(self.image_paths)}',
-                '검출': total_detections,
-                '라벨링': labeled_samples,
                 '샘플': len(samples)
             })
         
@@ -155,10 +128,106 @@ class DefectDataset(Dataset):
         
         print(f"\n[데이터 준비] ✅ 완료!")
         print(f"  ├─ 처리된 이미지: {processed_images}개")
-        print(f"  ├─ AprilGAN 검출 영역: {total_detections}개")
-        print(f"  ├─ JSON 라벨 매칭된 샘플: {labeled_samples}개 (실제 결함)")
-        print(f"  ├─ False Positive 샘플: {unlabeled_samples}개 (AprilGAN 오검출)")
-        print(f"  └─ 생성된 CNN 학습 샘플: {len(samples)}개 (모든 검출 결과 포함)\n")
+        print(f"  ├─ 추출된 결함 영역: {total_regions}개")
+        print(f"  └─ 생성된 샘플: {len(samples)}개\n")
+        
+        return samples
+    
+    def _prepare_samples_with_clip(self) -> List[Dict]:
+        """
+        CLIP 모델을 사용하여 결함 영역을 검출하고 실제 레이블과 매칭하여 샘플 생성
+        """
+        print(f"\n[데이터 준비] CLIP 모델로 결함 영역 검출 중...")
+        print(f"  ├─ 총 이미지 수: {len(self.image_paths)}개")
+        
+        samples = []
+        processed_images = 0
+        total_regions = 0
+        matched_regions = 0
+        
+        # 결함 유형 리스트 생성
+        defect_types = list(self.defect_type_to_idx.keys())
+        defect_types = [d for d in defect_types if d != 'Normal']
+        
+        from tqdm import tqdm
+        pbar = tqdm(
+            zip(self.image_paths, self.json_paths),
+            total=len(self.image_paths),
+            desc="CLIP 결함 검출",
+            unit="image",
+            ncols=100
+        )
+        
+        for img_path, json_path in pbar:
+            # 이미지 로드
+            image = cv2.imread(str(img_path))
+            if image is None:
+                continue
+            
+            image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            
+            # JSON에서 실제 레이블 추출
+            gt_bboxes, gt_types = extract_bboxes_from_json(json_path)
+            
+            # CLIP으로 결함 영역 검출
+            clip_result = self.clip_model.detect(
+                image_rgb,
+                defect_types=defect_types,
+                bboxes=gt_bboxes  # 바운딩 박스가 있으면 박스별 검출
+            )
+            anomaly_regions = clip_result.get('anomaly_regions', [])
+            total_regions += len(anomaly_regions)
+            
+            # 이상 영역과 실제 레이블 매칭
+            matched_regions_list = match_anomaly_regions(
+                anomaly_regions,
+                gt_bboxes,
+                gt_types
+            )
+            
+            # 각 매칭된 영역을 샘플로 추가
+            for region, defect_type in matched_regions_list:
+                if defect_type is None:
+                    # 레이블이 없는 경우 스킵
+                    continue
+                
+                # 결함 유형 정규화
+                from .bbox_utils import normalize_defect_type
+                normalized_defect_type = normalize_defect_type(defect_type)
+                
+                matched_regions += 1
+                
+                # 영역 추출
+                x1 = max(0, region['x1'])
+                y1 = max(0, region['y1'])
+                x2 = min(image_rgb.shape[1], region['x2'])
+                y2 = min(image_rgb.shape[0], region['y2'])
+                
+                patch = image_rgb[y1:y2, x1:x2]
+                
+                if patch.size == 0:
+                    continue
+                
+                samples.append({
+                    'patch': patch,
+                    'label': normalized_defect_type,
+                    'bbox': region,
+                    'image_path': str(img_path)
+                })
+            
+            processed_images += 1
+            pbar.set_postfix({
+                '처리': f'{processed_images}/{len(self.image_paths)}',
+                '샘플': len(samples)
+            })
+        
+        pbar.close()
+        
+        print(f"\n[데이터 준비] ✅ 완료!")
+        print(f"  ├─ 처리된 이미지: {processed_images}개")
+        print(f"  ├─ CLIP 검출 영역: {total_regions}개")
+        print(f"  ├─ 매칭된 영역: {matched_regions}개")
+        print(f"  └─ 생성된 샘플: {len(samples)}개\n")
         
         return samples
     
@@ -193,20 +262,22 @@ class DefectDataset(Dataset):
 
 def load_defect_data(
     data_dir: Path,
-    aprilgan_model,
     train_ratio: float = 0.8,
     batch_size: int = 32,
-    patch_size: Tuple[int, int] = (224, 224)
+    patch_size: Tuple[int, int] = (224, 224),
+    clip_model: Optional[object] = None,
+    use_clip: bool = False
 ) -> Tuple[DataLoader, DataLoader, Dict[str, int]]:
     """
     결함 데이터를 로드하고 DataLoader 생성
     
     Args:
         data_dir: 데이터 디렉토리 경로
-        aprilgan_model: AprilGAN 모델
         train_ratio: 학습 데이터 비율
         batch_size: 배치 크기
         patch_size: CNN 입력 크기
+        clip_model: CLIP 모델 (use_clip=True일 때 사용)
+        use_clip: CLIP 모델 사용 여부 (False면 JSON TagBoxes 직접 사용)
         
     Returns:
         train_loader: 학습 데이터 로더
@@ -271,9 +342,10 @@ def load_defect_data(
     train_dataset = DefectDataset(
         train_image_paths,
         train_json_paths,
-        aprilgan_model,
         defect_type_to_idx,
-        patch_size
+        patch_size,
+        clip_model=clip_model,
+        use_clip=use_clip
     )
     
     print(f"  └─ 검증 데이터셋 생성 중...")
@@ -281,9 +353,10 @@ def load_defect_data(
     val_dataset = DefectDataset(
         val_image_paths,
         val_json_paths,
-        aprilgan_model,
         defect_type_to_idx,
-        patch_size
+        patch_size,
+        clip_model=clip_model,
+        use_clip=use_clip
     )
     
     print(f"\n[5단계] DataLoader 생성")

@@ -2,11 +2,6 @@
 
 이 문서는 GAN-CNN 프로젝트의 환경 설정 및 패키지 설치 방법을 안내합니다.
 
-**프로젝트 개요:**
-- **AprilGAN**: DINOv2 Vision Transformer 기반 제로샷 이상 탐지 모델
-- **CNN**: ResNet 기반 결함 유형 분류 모델 (연합학습)
-- **연합학습**: 여러 클라이언트가 가중치만 공유하여 협력 학습
-
 ## 📋 목차
 
 1. [필수 요구사항](#필수-요구사항)
@@ -137,14 +132,6 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 pip install -r requirements.txt
 ```
 
-#### 6단계: Vision Transformer 모델 패키지 설치 (DINOv2용)
-
-AprilGAN 제로샷 모델이 DINOv2 Vision Transformer를 사용하므로 추가 패키지가 필요합니다:
-
-```powershell
-pip install timm
-```
-
 
 ### 가상 환경 비활성화
 
@@ -204,7 +191,6 @@ pip list
 다음 주요 패키지가 설치되어 있는지 확인합니다:
 - **데이터베이스**: pymongo, python-dotenv
 - **머신러닝**: torch, torchvision
-- **Vision Transformer**: timm (DINOv2용)
 - **데이터 처리**: numpy, pandas
 - **이미지 처리**: Pillow, opencv-python
 - **시각화**: matplotlib, seaborn
@@ -365,13 +351,7 @@ python --version
 - **데이터 다운로드**: `utils/dataset/download_labeled_layers.py` 실행
 - **데이터 분석**: `utils/dataset/analyze_defect_types.py` 실행
 - **데이터 정리**: `utils/dataset/cleanup_dataset.py` 실행
-- **연합학습 실행**: `python train_federated.py --data-dir data` 실행
 - **프로젝트 개요**: `README.md` 참고
-
-**중요 참고사항:**
-- AprilGAN 모델은 DINOv2 Vision Transformer를 사용하므로 `timm` 패키지가 필수입니다
-- 모델 경로를 지정하지 않으면 `timm`에서 사전 학습된 모델을 자동으로 다운로드합니다
-- 실제 배포 시나리오를 반영하여 AprilGAN의 모든 검출 결과가 CNN 학습에 포함됩니다
 
 ---
 

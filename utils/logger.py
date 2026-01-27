@@ -51,7 +51,6 @@ class FederatedLearningLogger:
             'experiment_name': experiment_name,
             'start_time': datetime.now().isoformat(),
             'config': {},
-            'aprilgan_evaluation': {},
             'rounds': [],
             'client_distributions': {},
             'final_results': {}
@@ -94,29 +93,6 @@ class FederatedLearningLogger:
         """
         self.log_data['config'] = config
         print(f"[로거] 실험 설정 기록 완료")
-    
-    def log_aprilgan_evaluation(self, eval_results: Dict[str, Any]):
-        """
-        AprilGAN 제로샷 모델 평가 결과 기록
-        
-        Args:
-            eval_results: evaluate_aprilgan_detection의 반환값
-        """
-        self.log_data['aprilgan_evaluation'] = {
-            'timestamp': datetime.now().isoformat(),
-            'total_images': eval_results.get('total_images', 0),
-            'total_detections': eval_results.get('total_detections', 0),
-            'total_ground_truth': eval_results.get('total_ground_truth', 0),
-            'true_positives': eval_results.get('true_positives', 0),
-            'false_positives': eval_results.get('false_positives', 0),
-            'false_negatives': eval_results.get('false_negatives', 0),
-            'precision': eval_results.get('precision', 0.0),
-            'recall': eval_results.get('recall', 0.0),
-            'f1_score': eval_results.get('f1_score', 0.0),
-            'mean_iou': eval_results.get('mean_iou', 0.0),
-            'iou_threshold': eval_results.get('iou_threshold', 0.5)
-        }
-        print(f"[로거] AprilGAN 평가 결과 기록 완료")
     
     def log_client_distribution(
         self,

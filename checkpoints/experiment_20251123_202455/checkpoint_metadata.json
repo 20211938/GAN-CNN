@@ -1,0 +1,76 @@
+{
+  "rounds": [
+    {
+      "round": 1,
+      "timestamp": "2025-11-23T20:39:34.053996",
+      "metrics": {
+        "accuracy": 0.9072414010634317,
+        "loss": 0.32947249800974865,
+        "num_clients": 5
+      },
+      "config": {
+        "data_dir": "data",
+        "num_clients": 5,
+        "min_clients": 5,
+        "non_iid_alpha": 0.5,
+        "num_rounds": 3,
+        "epochs": 1,
+        "learning_rate": 0.001,
+        "batch_size": 32,
+        "train_ratio": 0.8,
+        "backbone": "resnet18",
+        "device": "cuda",
+        "use_few_shot": false,
+        "server_port": 5000
+      }
+    },
+    {
+      "round": 2,
+      "timestamp": "2025-11-23T20:41:47.179848",
+      "metrics": {
+        "accuracy": 0.9563304230585349,
+        "loss": 0.22460555378920327,
+        "num_clients": 5
+      },
+      "config": {
+        "data_dir": "data",
+        "num_clients": 5,
+        "min_clients": 5,
+        "non_iid_alpha": 0.5,
+        "num_rounds": 3,
+        "epochs": 1,
+        "learning_rate": 0.001,
+        "batch_size": 32,
+        "train_ratio": 0.8,
+        "backbone": "resnet18",
+        "device": "cuda",
+        "use_few_shot": false,
+        "server_port": 5000
+      }
+    },
+    {
+      "round": 3,
+      "timestamp": "2025-11-23T20:44:01.843856",
+      "metrics": {
+        "accuracy": 0.9458810928416865,
+        "loss": 0.3366798614953551,
+        "num_clients": 5
+      },
+      "config": {
+        "data_dir": "data",
+        "num_clients": 5,
+        "min_clients": 5,
+        "non_iid_alpha": 0.5,
+        "num_rounds": 3,
+        "epochs": 1,
+        "learning_rate": 0.001,
+        "batch_size": 32,
+        "train_ratio": 0.8,
+        "backbone": "resnet18",
+        "device": "cuda",
+        "use_few_shot": false,
+        "server_port": 5000
+      }
+    }
+  ]
+}
